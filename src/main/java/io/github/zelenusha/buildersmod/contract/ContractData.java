@@ -76,6 +76,7 @@ public final class ContractData extends SavedData {
         int completed;
         long unpaid;
         FineLedger fines = new FineLedger();
+        AppealPuzzle appeal;
         int highestFloor = 1;
         int sequence;
         Accepted special;

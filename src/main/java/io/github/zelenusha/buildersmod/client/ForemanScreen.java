@@ -27,8 +27,10 @@ final class ForemanScreen extends Screen {
         if (panel.dialogue()) {
             action("Открыть заказы", ContractNetwork.Action.SHOW_ORDERS, 0, x, y + 153, WIDTH - 24);
             Button demolitions = action("Сносы — " + panel.failed(), ContractNetwork.Action.SHOW_DEMOLITIONS, 0,
-                    x, y + 176, WIDTH - 24);
+                    x, y + 176, 141);
             demolitions.active = panel.failed() > 0;
+            action("Штрафы — " + panel.fineCount(), ContractNetwork.Action.SHOW_FINES, 0,
+                    x + 151, y + 176, 141).active = panel.fineCount() > 0;
             return;
         }
 

@@ -17,7 +17,7 @@ import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class ContractNetwork {
-    public enum Action { SHOW_ORDERS, ACCEPT, SUBMIT, CANCEL, CLAIM, BUY_TIME, SHOW_DEMOLITIONS, DEMOLISH, APPEAL, CARD }
+    public enum Action { SHOW_ORDERS, ACCEPT, SUBMIT, CANCEL, CLAIM, BUY_TIME, SHOW_DEMOLITIONS, DEMOLISH, SHOW_FINES, APPEAL, CARD }
     public enum State { NOT_READY, AVAILABLE, ACTIVE, NO_SPACE }
 
     public record Material(String label, String substitutes, int placed, int needed) {
@@ -110,6 +110,42 @@ public final class ContractNetwork {
         }
     }
 
+    public record FineRow(UUID id, String reason, int amount, int outstanding, int attemptsLeft, boolean overturned) {
+        void write(FriendlyByteBuf buf) {
+            buf.writeUUID(id).writeUtf(reason, 256).writeVarInt(amount).writeVarInt(outstanding)
+                    .writeVarInt(attemptsLeft).writeBoolean(overturned);
+        }
+
+        static FineRow read(FriendlyByteBuf buf) {
+            return new FineRow(buf.readUUID(), buf.readUtf(256), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readBoolean());
+        }
+    }
+
+    public record AppealView(UUID id, String hint, int selected, int required, long remainingMillis,
+                             List<AppealPuzzle.Card> cards) {
+        void write(FriendlyByteBuf buf) {
+            buf.writeUUID(id).writeUtf(hint, 512).writeVarInt(selected).writeVarInt(required).writeVarLong(remainingMillis);
+            buf.writeCollection(cards, (dest, card) -> dest.writeVarInt(card.id()).writeUtf(card.text(), 128));
+        }
+
+        static AppealView read(FriendlyByteBuf buf) {
+            return new AppealView(buf.readUUID(), buf.readUtf(512), buf.readVarInt(), buf.readVarInt(), buf.readVarLong(),
+                    buf.readList(source -> new AppealPuzzle.Card(source.readVarInt(), source.readUtf(128))));
+        }
+    }
+
+    public record FinePanel(UUID foreman, List<FineRow> fines, AppealView attempt, String feedback) {
+        static void write(FinePanel panel, FriendlyByteBuf buf) {
+            buf.writeUUID(panel.foreman).writeCollection(panel.fines, (dest, row) -> row.write(dest));
+            buf.writeNullable(panel.attempt, (dest, view) -> view.write(dest));
+            buf.writeUtf(panel.feedback, 256);
+        }
+
+        static FinePanel read(FriendlyByteBuf buf) {
+            return new FinePanel(buf.readUUID(), buf.readList(FineRow::read), buf.readNullable(AppealView::read), buf.readUtf(256));
+        }
+    }
+
     private record Request(UUID foreman, Action action, int choice, UUID workId) {
         static void write(Request value, FriendlyByteBuf buffer) {
             buffer.writeUUID(value.foreman).writeEnum(value.action).writeVarInt(value.choice);
@@ -122,7 +158,7 @@ public final class ContractNetwork {
         }
     }
 
-    private static final String PROTOCOL = "3";
+    private static final String PROTOCOL = "4";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "contracts"), () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals);
 
@@ -153,6 +189,10 @@ public final class ContractNetwork {
                 .encoder(DemolitionPanel::write).decoder(DemolitionPanel::read)
                 .consumerMainThread((panel, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
                         () -> () -> ContractClient.openDemolitions(panel))).add();
+        CHANNEL.messageBuilder(FinePanel.class, 5, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(FinePanel::write).decoder(FinePanel::read)
+                .consumerMainThread((panel, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
+                        () -> () -> ContractClient.openFines(panel))).add();
     }
 
     static void sendPanel(ServerPlayer player, Panel panel) {
@@ -160,6 +200,10 @@ public final class ContractNetwork {
     }
 
     static void sendDemolitions(ServerPlayer player, DemolitionPanel panel) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), panel);
+    }
+
+    static void sendFines(ServerPlayer player, FinePanel panel) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), panel);
     }
 
@@ -188,6 +232,10 @@ public final class ContractNetwork {
     }
 
     public static void deliverDemolition(UUID foreman, UUID workId) {
-        CHANNEL.sendToServer(new Request(foreman, Action.DEMOLISH, 0, workId));
+        request(foreman, Action.DEMOLISH, 0, workId);
+    }
+
+    public static void request(UUID foreman, Action action, int choice, UUID workId) {
+        CHANNEL.sendToServer(new Request(foreman, action, choice, workId));
     }
 }

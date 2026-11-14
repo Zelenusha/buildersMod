@@ -87,17 +87,21 @@ public final class ContractEvents {
         ContractData.Account account = data.account(player.getUUID());
         checkDeadline(player, data, account);
         String feedback = switch (action) {
-            case SHOW_ORDERS, SHOW_DEMOLITIONS -> "";
+            case SHOW_ORDERS, SHOW_DEMOLITIONS, SHOW_FINES -> "";
             case ACCEPT -> accept(player, data, account, choice);
             case SUBMIT -> submit(player, data, account);
             case CANCEL -> cancel(player, data, account);
             case CLAIM -> claim(player, data, account);
             case BUY_TIME -> buyTime(player, data, account);
             case DEMOLISH -> deliverDemolition(player, data, account, workId);
-            case APPEAL, CARD -> "";
+            case APPEAL -> startAppeal(player, data, account, workId);
+            case CARD -> chooseAppealCard(data, account, workId, choice);
         };
         if (action == ContractNetwork.Action.SHOW_DEMOLITIONS || action == ContractNetwork.Action.DEMOLISH) {
             showDemolitions(player, foreman, account, feedback);
+        } else if (action == ContractNetwork.Action.SHOW_FINES || action == ContractNetwork.Action.APPEAL
+                || action == ContractNetwork.Action.CARD) {
+            showFines(player, foreman, account, feedback);
         } else {
             show(player, foreman, false, feedback);
         }
@@ -172,7 +176,7 @@ public final class ContractEvents {
             return "Стройплощадка недоступна.";
         }
         int fine = check.complete() ? 3 : ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount());
-        fail(data, account, order, fine, "Отмена заказа");
+        fail(data, account, order, fine, "Отмена заказа", fineAudacity(player, 0, 1));
         return "Заказ отменён. Штраф: " + fine + " изумрудов.";
     }
 
@@ -193,22 +197,28 @@ public final class ContractEvents {
         } else if (check.complete()) {
             finish(player, data, account, check, false);
         } else if (order.slot() < 0) {
-            int fine = ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()) + 3 * order.lateCount();
-            account.fines.issue(fine, "Недострой в срок", Math.min(5, 1 + fine / 10));
+            int surcharge = 3 * order.lateCount();
+            int fine = ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()) + surcharge;
+            account.fines.issue(fine, "Недострой в срок", fineAudacity(player, surcharge, 0));
             account.active = order.withDeadline(data.time(player.server) + order.difficulty().duration(), order.lateCount() + 1);
             retainSpecial(account, account.active);
             data.setDirty();
             player.sendSystemMessage(Component.literal("Прораб: Срок продлён. Штраф: " + fine + " изумрудов."));
         } else {
             fail(data, account, order, ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()),
-                    "Недострой в срок");
+                    "Недострой в срок", fineAudacity(player, 0, 0));
             player.sendSystemMessage(Component.literal("Срок истёк. Прораб оштрафовал за недострой."));
         }
         return true;
     }
 
-    private static void fail(ContractData data, ContractData.Account account, ContractData.Accepted order, int fine, String reason) {
-        account.fines.issue(fine, reason, Math.min(5, 1 + fine / 10));
+    private static int fineAudacity(ServerPlayer player, int surcharge, int reasonWeight) {
+        return Math.min(5, 1 + Math.max(0, surcharge) / 3 + reasonWeight + player.getRandom().nextInt(2));
+    }
+
+    private static void fail(ContractData data, ContractData.Account account, ContractData.Accepted order, int fine, String reason,
+                             int audacity) {
+        account.fines.issue(fine, reason, audacity);
         if (order.slot() >= 0) {
             account.failed.add(new DemolitionWork(order));
             account.offers[order.slot()] = null;
@@ -245,6 +255,67 @@ public final class ContractEvents {
                 .map(entry -> new ContractNetwork.Material(entry.getKey().getDescriptionId(), "", 0, entry.getValue()))
                 .sorted(java.util.Comparator.comparing(ContractNetwork.Material::label)).toList())).toList();
         ContractNetwork.sendDemolitions(player, new ContractNetwork.DemolitionPanel(foreman, demolitions, feedback));
+    }
+
+    private static String startAppeal(ServerPlayer player, ContractData data, ContractData.Account account, UUID fineId) {
+        long now = System.nanoTime();
+        expireAppeal(account, now);
+        if (account.appeal != null) {
+            return "Сначала закончи текущую попытку.";
+        }
+        if (fineId == null || !account.fines.beginAttempt(fineId)) {
+            return "Попытки по этому штрафу недоступны.";
+        }
+        account.appeal = AppealPuzzle.start(account.fines.find(fineId), player.getRandom()::nextInt, now);
+        data.setDirty();
+        return "";
+    }
+
+    private static String chooseAppealCard(ContractData data, ContractData.Account account, UUID attemptId, int choice) {
+        AppealPuzzle puzzle = account.appeal;
+        if (puzzle == null || !puzzle.attemptId().equals(attemptId)) {
+            return "Попытка уже завершена.";
+        }
+        long now = System.nanoTime();
+        return switch (puzzle.choose(choice, now)) {
+            case IN_PROGRESS -> "";
+            case EXPIRED -> {
+                expireAppeal(account, now);
+                yield "Время попытки истекло.";
+            }
+            case WRONG_ORDER -> {
+                account.fines.expireAttempt(puzzle.fineId());
+                account.appeal = null;
+                yield "Аргумент не принят. Проверь порядок карточек.";
+            }
+            case WON -> {
+                var award = account.fines.appealResolved(puzzle.fineId(), puzzle.remainingFullSeconds(now)).orElseThrow();
+                account.appeal = null;
+                account.unpaid += award.refund() + award.compensation();
+                data.setDirty();
+                yield "Штраф отменён. Возврат " + award.refund() + ", компенсация " + award.compensation() + ".";
+            }
+        };
+    }
+
+    private static boolean expireAppeal(ContractData.Account account, long now) {
+        if (account.appeal == null || account.appeal.status(now) != AppealPuzzle.Status.EXPIRED) {
+            return false;
+        }
+        account.fines.expireAttempt(account.appeal.fineId());
+        account.appeal = null;
+        return true;
+    }
+
+    private static void showFines(ServerPlayer player, UUID foreman, ContractData.Account account, String feedback) {
+        long now = System.nanoTime();
+        String message = expireAppeal(account, now) && feedback.isEmpty() ? "Время попытки истекло." : feedback;
+        AppealPuzzle puzzle = account.appeal;
+        var view = puzzle == null ? null : new ContractNetwork.AppealView(puzzle.attemptId(), puzzle.hint(),
+                puzzle.progress(), puzzle.requiredCount(), puzzle.remainingNanos(now) / 1_000_000, puzzle.cards());
+        var rows = account.fines.entries().stream().map(fine -> new ContractNetwork.FineRow(fine.id(), fine.reason(),
+                fine.amount(), fine.outstanding(), FineLedger.MAX_ATTEMPTS - fine.attemptsUsed(), fine.overturned())).toList();
+        ContractNetwork.sendFines(player, new ContractNetwork.FinePanel(foreman, rows, view, message));
     }
 
     private static void finish(ServerPlayer player, ContractData data, ContractData.Account account,
