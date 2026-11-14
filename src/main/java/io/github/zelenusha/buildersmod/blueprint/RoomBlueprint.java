@@ -15,6 +15,8 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.FenceBlock;
+import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.FurnaceBlock;
 import net.minecraft.world.level.block.IronBarsBlock;
 import net.minecraft.world.level.block.Rotation;
@@ -50,8 +52,9 @@ public final class RoomBlueprint {
             if (expectedState.isAir() != (criterion == Criterion.CLEARANCE)) {
                 throw new IllegalArgumentException("Only clearance can require an air block");
             }
-            if (criterion == Criterion.DOORWAYS && !(expectedState.getBlock() instanceof DoorBlock)) {
-                throw new IllegalArgumentException("A doorway must require a door block");
+            if (criterion == Criterion.DOORWAYS && !(expectedState.getBlock() instanceof DoorBlock)
+                    && !(expectedState.getBlock() instanceof FenceGateBlock)) {
+                throw new IllegalArgumentException("A doorway must require a door or gate block");
             }
             if (!replacements.isEmpty() && (criterion == Criterion.CLEARANCE || criterion == Criterion.DOORWAYS
                     || replacements.stream().anyMatch(BlockState::isAir))) {
@@ -79,6 +82,10 @@ public final class RoomBlueprint {
             }
             if (criterion != Criterion.DOORWAYS) {
                 return checkBlockState(actual) ? Status.CORRECT : Status.WRONG;
+            }
+            if (expectedState.getBlock() instanceof FenceGateBlock) {
+                return actual.getValue(FenceGateBlock.FACING).getAxis() == expectedState.getValue(FenceGateBlock.FACING).getAxis()
+                        ? Status.CORRECT : Status.WRONG;
             }
 
             DoubleBlockHalf half = expectedState.getValue(DoorBlock.HALF);
@@ -108,6 +115,9 @@ public final class RoomBlueprint {
         }
 
         private boolean checkBlockState(BlockState actual) {
+            if (criterion == Criterion.WALLS && expectedState.getBlock() instanceof FenceBlock) {
+                return true;
+            }
             if (criterion == Criterion.WINDOWS && expectedState.getBlock() instanceof IronBarsBlock) {
                 return true;
             }

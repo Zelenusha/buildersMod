@@ -69,7 +69,7 @@ public final class ContractBalance {
         return switch (pattern) { case NONE -> 0; case CHECKERBOARD -> 3; default -> 2; };
     }
 
-    private static int rarityWage(int base, RoomBlueprint blueprint) {
+    static int rarityWage(int base, RoomBlueprint blueprint) {
         int[] counts = new int[6];
         int total = 0;
         for (var requirement : blueprint.requirements().values()) {

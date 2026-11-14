@@ -79,7 +79,10 @@ public final class ContractData extends SavedData {
         int highestFloor = 1;
         int sequence;
         Accepted special;
+        Accepted pendingCourtyard;
+        int nextCourtyardSlot = -2;
         final Accepted[] offers = new Accepted[5];
+        final List<Accepted> courtyards = new ArrayList<>();
         final List<Accepted> rooms = new ArrayList<>();
         final List<DemolitionWork> failed = new ArrayList<>();
     }
@@ -106,7 +109,7 @@ public final class ContractData extends SavedData {
         }
     }
 
-    private static ContractData load(CompoundTag root) {
+    static ContractData load(CompoundTag root) {
         ContractData data = new ContractData();
         data.sleepTicks = root.getLong("SleepTicks");
         ListTag players = root.getList("Players", Tag.TAG_COMPOUND);
@@ -130,6 +133,9 @@ public final class ContractData extends SavedData {
                 account.stairInspection = StairInspection.load(player.getString("StairInspection"));
             }
             account.special = loadContract(player.getCompound("Special"));
+            account.pendingCourtyard = loadContract(player.getCompound("PendingCourtyard"));
+            account.nextCourtyardSlot = player.contains("NextCourtyardSlot") ? player.getInt("NextCourtyardSlot") : -2;
+            loadContracts(account.courtyards, player.getList("Courtyards", Tag.TAG_COMPOUND));
             for (int slot = 0; slot < account.offers.length; slot++) {
                 account.offers[slot] = loadContract(player.getCompound("Offer" + slot));
             }
@@ -257,6 +263,11 @@ public final class ContractData extends SavedData {
             if (account.special != null) {
                 player.put("Special", saveContract(account.special));
             }
+            if (account.pendingCourtyard != null) {
+                player.put("PendingCourtyard", saveContract(account.pendingCourtyard));
+            }
+            player.putInt("NextCourtyardSlot", account.nextCourtyardSlot);
+            player.put("Courtyards", saveContracts(account.courtyards));
             for (int slot = 0; slot < account.offers.length; slot++) {
                 if (account.offers[slot] != null) {
                     player.put("Offer" + slot, saveContract(account.offers[slot]));

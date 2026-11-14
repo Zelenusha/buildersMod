@@ -109,12 +109,19 @@ public final class ContractEvents {
             return "Сейчас этот заказ недоступен.";
         }
         ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
-        if (site == null || slot < -1 || slot >= account.offers.length) {
+        if (site == null || slot >= account.offers.length) {
             return "Сейчас этот заказ недоступен.";
         }
         OfferFactory.fill(player, data, account);
-        ContractData.Accepted selected = slot == -1
-                ? (hasAvailableRoom(site, account) ? null : OfferFactory.stairs(site, account)) : account.offers[slot];
+        ContractData.Accepted selected;
+        if (slot == -1) {
+            selected = hasAvailableRoom(site, account) ? null : OfferFactory.extension(site, account);
+        } else if (slot < -1) {
+            selected = account.courtyards.stream().filter(yard -> yard.slot() == slot && OfferFactory.canResume(site, yard))
+                    .findFirst().orElse(null);
+        } else {
+            selected = account.offers[slot];
+        }
         if (selected != null && slot >= 0) {
             selected = OfferFactory.bind(site, account, selected);
         }
@@ -124,6 +131,7 @@ public final class ContractEvents {
         if (selected.kind() == ContractData.Kind.ROOM || selected.kind() == ContractData.Kind.SAMPLE) {
             selected = selected.rebound(selected.anchor(), selected.outward(), selected.blueprint(),
                     DemolitionWork.snapshot(site, selected.blueprint()));
+            account.pendingCourtyard = OfferFactory.courtyard(site, account, selected);
         }
         account.active = selected.started(data.time(player.server));
         account.stairInspection = ContractData.StairInspection.WAITING;
@@ -184,11 +192,11 @@ public final class ContractEvents {
             player.sendSystemMessage(Component.literal("Лестница готова. Сдай её прорабу, чтобы открыть этаж."));
         } else if (check.complete()) {
             finish(player, data, account, check, false);
-        } else if (order.slot() == -1) {
+        } else if (order.slot() < 0) {
             int fine = ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()) + 3 * order.lateCount();
             account.fines.issue(fine, "Недострой в срок", Math.min(5, 1 + fine / 10));
             account.active = order.withDeadline(data.time(player.server) + order.difficulty().duration(), order.lateCount() + 1);
-            account.special = account.active;
+            retainSpecial(account, account.active);
             data.setDirty();
             player.sendSystemMessage(Component.literal("Прораб: Срок продлён. Штраф: " + fine + " изумрудов."));
         } else {
@@ -205,8 +213,9 @@ public final class ContractEvents {
             account.failed.add(new DemolitionWork(order));
             account.offers[order.slot()] = null;
         } else {
-            account.special = order;
+            retainSpecial(account, order);
         }
+        account.pendingCourtyard = null;
         account.sequence++;
         account.active = null;
         account.stairInspection = ContractData.StairInspection.WAITING;
@@ -250,8 +259,15 @@ public final class ContractEvents {
         }
         if (order.slot() >= 0) {
             account.offers[order.slot()] = null;
-        } else {
+        } else if (order.slot() == -1) {
             account.special = null;
+        } else {
+            account.courtyards.removeIf(yard -> yard.slot() == order.slot());
+        }
+        if (account.pendingCourtyard != null) {
+            account.courtyards.add(account.pendingCourtyard);
+            account.nextCourtyardSlot--;
+            account.pendingCourtyard = null;
         }
         account.sequence++;
         int bonus = early && order.lateCount() == 0
@@ -316,7 +332,7 @@ public final class ContractEvents {
         player.getInventory().setChanged();
         account.active = order.withExtraDay(data.time(player.server));
         if (order.slot() < 0) {
-            account.special = account.active;
+            retainSpecial(account, account.active);
         }
         account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
@@ -325,6 +341,14 @@ public final class ContractEvents {
 
     private static boolean canBuyTime(ContractData.Account account) {
         return account.stairInspection.canBuyDay(account.active.extraDay());
+    }
+
+    private static void retainSpecial(ContractData.Account account, ContractData.Accepted order) {
+        if (order.slot() == -1) {
+            account.special = order;
+        } else {
+            account.courtyards.replaceAll(yard -> yard.slot() == order.slot() ? order : yard);
+        }
     }
 
     private static RoomBlueprint.BlueprintCheck check(ServerPlayer player, ContractData.Accepted order) {
@@ -379,10 +403,13 @@ public final class ContractEvents {
                     }
                 }
                 if (cards.stream().noneMatch(ContractNetwork.Card::available)) {
-                    ContractData.Accepted stairs = OfferFactory.stairs(site, account);
-                    if (stairs != null) {
-                        cards.add(card(stairs, null, stairs.difficulty().duration(), true, false));
+                    ContractData.Accepted extension = OfferFactory.extension(site, account);
+                    if (extension != null) {
+                        cards.add(card(extension, null, extension.difficulty().duration(), true, false));
                     }
+                }
+                for (var yard : account.courtyards) {
+                    cards.add(card(yard, null, yard.difficulty().duration(), OfferFactory.canResume(site, yard), false));
                 }
             }
             state = cards.stream().anyMatch(ContractNetwork.Card::available)

@@ -6,6 +6,8 @@ import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import io.github.zelenusha.buildersmod.site.ConstructionSite.SiteDoor;
+import io.github.zelenusha.buildersmod.site.SiteCorridorBlueprint;
+import io.github.zelenusha.buildersmod.site.SiteCourtyardBlueprint;
 import io.github.zelenusha.buildersmod.site.SiteStairBlueprint;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -101,13 +103,84 @@ final class OfferFactory {
             if (!hasDoor(site, door)) {
                 continue;
             }
-            RoomBlueprint candidate = offer.blueprint().reorient(offer.anchor(), offer.outward(), door.lower(), door.outward());
-            Placement placement = scan(site, candidate, occupied, account.highestFloor);
-            if (placement != null) {
-                return offer.rebound(door.lower(), door.outward(), placement.blueprint(), placement.originals());
+            ContractData.Accepted placed = bindFrom(site, account, offer, door, occupied);
+            if (placed != null) {
+                return placed;
             }
         }
         return null;
+    }
+
+    private static ContractData.Accepted bindFrom(ServerLevel site, ContractData.Account account, ContractData.Accepted offer,
+                                                   SiteDoor door, List<RoomBlueprint.Bounds> occupied) {
+        RoomBlueprint candidate = offer.blueprint().reorient(offer.anchor(), offer.outward(), door.lower(), door.outward());
+        Placement placement = scan(site, candidate, occupied, account.highestFloor);
+        return placement == null ? null : offer.rebound(door.lower(), door.outward(), placement.blueprint(), placement.originals());
+    }
+
+    static ContractData.Accepted extension(ServerLevel site, ContractData.Account account) {
+        if (account.special != null) {
+            return canResume(site, account.special) ? account.special : null;
+        }
+        ContractData.Accepted corridor = account.highestFloor > 1 ? corridor(site, account) : null;
+        return corridor != null ? corridor : stairs(site, account);
+    }
+
+    private static ContractData.Accepted corridor(ServerLevel site, ContractData.Account account) {
+        List<RoomBlueprint.Bounds> occupied = occupied(account);
+        int topDoorY = ConstructionSite.START_FLOOR_Y + (account.highestFloor - 1) * ConstructionSite.FLOOR_STEP + 1;
+        var entrances = doors(account).stream().filter(door -> door.lower().getY() == topDoorY && hasDoor(site, door)).toList();
+        var corridor = SiteCorridorBlueprint.createFitting(entrances, blueprint -> {
+            if (scan(site, blueprint, occupied, account.highestFloor) == null) {
+                return false;
+            }
+            var withCorridor = new ArrayList<>(occupied);
+            withCorridor.add(blueprint.bounds());
+            return blueprint.doors().stream().skip(1).anyMatch(exit -> {
+                SiteDoor door = new SiteDoor(exit.lowerPosition(), exit.outward());
+                for (ContractData.Accepted offer : account.offers) {
+                    if (offer != null && bindFrom(site, account, offer, door, withCorridor) != null) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+        });
+        if (corridor.isEmpty()) {
+            return null;
+        }
+        RoomBlueprint blueprint = corridor.orElseThrow();
+        RoomBlueprint.Door entry = blueprint.doors().get(0);
+        Direction outward = entry.outward().getOpposite();
+        Placement placement = scan(site, blueprint, occupied, account.highestFloor);
+        var level = ContractBalance.Difficulty.ONE;
+        return proposal(new SiteDoor(entry.lowerPosition().relative(entry.outward()), outward), level,
+                placement.blueprint(), specialWage(level, placement.blueprint()), ContractData.Kind.CORRIDOR, -1);
+    }
+
+    static ContractData.Accepted courtyard(ServerLevel site, ContractData.Account account, ContractData.Accepted room) {
+        List<RoomBlueprint.Bounds> occupied = occupied(account);
+        occupied.add(room.blueprint().bounds());
+        var yard = SiteCourtyardBlueprint.createFitting(room.blueprint(), blueprint ->
+                scan(site, blueprint, occupied, account.highestFloor) != null);
+        if (yard.isEmpty()) {
+            return null;
+        }
+        Placement placement = scan(site, yard.orElseThrow(), occupied, account.highestFloor);
+        var gate = placement.blueprint().doors().get(0);
+        return proposal(new SiteDoor(gate.lowerPosition(), gate.outward()), room.difficulty(), placement.blueprint(),
+                specialWage(room.difficulty(), placement.blueprint()), ContractData.Kind.COURTYARD, account.nextCourtyardSlot);
+    }
+
+    static boolean canResume(ServerLevel site, ContractData.Accepted proposal) {
+        return proposal.blueprint().requirements().keySet().stream().noneMatch(position -> {
+            BlockState state = site.getBlockState(position);
+            return state.hasBlockEntity() || state.getDestroySpeed(site, position) < 0 || !state.getFluidState().isEmpty();
+        });
+    }
+
+    private static int specialWage(ContractBalance.Difficulty level, RoomBlueprint blueprint) {
+        return level.emeralds() + ContractBalance.rarityWage(level.emeralds(), blueprint);
     }
 
     static ContractData.Accepted stairs(ServerLevel site, ContractData.Account account) {
@@ -122,9 +195,10 @@ final class OfferFactory {
         var brick = Blocks.STONE_BRICKS.defaultBlockState();
         var materials = new SiteStairBlueprint.Materials(Blocks.COBBLESTONE_STAIRS.defaultBlockState(),
                 Blocks.COBBLESTONE.defaultBlockState(), stone, brick, brick);
+        var level = ContractBalance.Difficulty.TWO;
         return SiteStairBlueprint.createFitting(floor, materials, stone, brick, site::getBlockState)
                 .map(blueprint -> proposal(new SiteDoor(new BlockPos(0, floor + 1, 0), Direction.WEST),
-                        ContractBalance.Difficulty.TWO, blueprint, 10, ContractData.Kind.STAIRS, -1)).orElse(null);
+                        level, blueprint, specialWage(level, blueprint), ContractData.Kind.STAIRS, -1)).orElse(null);
     }
 
     private static ContractData.Accepted proposal(SiteDoor door, ContractBalance.Difficulty level, RoomBlueprint blueprint,
@@ -152,6 +226,10 @@ final class OfferFactory {
         account.rooms.stream().filter(order -> order.kind() != ContractData.Kind.STAIRS)
                 .map(order -> order.blueprint().bounds()).forEach(occupied::add);
         account.failed.stream().map(work -> work.order().blueprint().bounds()).forEach(occupied::add);
+        account.courtyards.stream().map(order -> order.blueprint().bounds()).forEach(occupied::add);
+        if (account.pendingCourtyard != null) {
+            occupied.add(account.pendingCourtyard.blueprint().bounds());
+        }
         if (account.active != null && account.active.kind() != ContractData.Kind.STAIRS) {
             occupied.add(account.active.blueprint().bounds());
         }

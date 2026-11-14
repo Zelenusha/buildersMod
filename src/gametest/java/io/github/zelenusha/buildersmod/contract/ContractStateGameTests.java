@@ -1,17 +1,54 @@
 package io.github.zelenusha.buildersmod.contract;
 
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
+import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint;
+import io.github.zelenusha.buildersmod.site.ConstructionSite;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 
 @GameTestHolder("buildersmod")
 @PrefixGameTestTemplate(false)
 public final class ContractStateGameTests {
+    @GameTest(template = "empty")
+    public static void preservesTheReservedCourtyardUntilTheRoomIsAccepted(GameTestHelper helper) {
+        var site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        var data = new ContractData();
+        UUID owner = UUID.randomUUID();
+        var account = data.account(owner);
+        var stone = RectangularRoomBlueprint.Surface.solid(Blocks.STONE);
+        var spec = new RectangularRoomBlueprint.Spec(7, 5, List.of(4), stone, stone, stone,
+                Set.of(RectangularRoomBlueprint.Wall.OPPOSITE),
+                List.of(new RectangularRoomBlueprint.Window(0, RectangularRoomBlueprint.Wall.LEFT, 1, 1, 2, 2, Blocks.GLASS)),
+                List.of(new RectangularRoomBlueprint.Fixture(0, new BlockPos(2, 1, 2), Blocks.TORCH.defaultBlockState())),
+                List.of(), Optional.empty());
+        BlockPos anchor = new BlockPos(201, 65, 201);
+        var blueprint = RectangularRoomBlueprint.at(anchor, Direction.NORTH, spec);
+        var room = new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, 0, false, blueprint,
+                6, ContractData.Kind.ROOM, 1, 0, Map.of());
+        var yard = OfferFactory.courtyard(site, account, room);
+        helper.assertTrue(yard != null && yard.slot() == -2 && yard.kind() == ContractData.Kind.COURTYARD,
+                "A fitting window should reserve a separate courtyard");
+        account.active = room;
+        account.pendingCourtyard = yard;
+        var reloaded = ContractData.load(data.save(new CompoundTag())).account(owner);
+        helper.assertTrue(reloaded.courtyards.isEmpty() && reloaded.pendingCourtyard != null,
+                "The reservation stays hidden from the offer list while the parent room is active");
+        helper.assertTrue(reloaded.pendingCourtyard.blueprint().bounds().equals(yard.blueprint().bounds()),
+                "The courtyard stays attached to the same window after reload");
+        helper.succeed();
+    }
+
     @GameTest(template = "empty")
     public static void stairRepairsAndOrdinaryExtensionsHaveSeparateEligibility(GameTestHelper helper) {
         long day = ContractBalance.TICKS_PER_DAY;

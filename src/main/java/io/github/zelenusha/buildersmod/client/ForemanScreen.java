@@ -35,15 +35,24 @@ final class ForemanScreen extends Screen {
         boolean active = panel.state() == ContractNetwork.State.ACTIVE;
         ContractNetwork.Card card = selectedCard();
         if (!active) {
-            for (int i = 0; i < panel.cards().size(); i++) {
-                int index = i;
-                String label = panel.cards().get(i).slot() < 0 ? "Этаж" : Integer.toString(panel.cards().get(i).slot() + 1);
-                Button tab = addRenderableWidget(Button.builder(Component.literal(label), button -> {
-                    selected = index;
-                    materialOffset = 0;
-                    rebuildWidgets();
-                }).bounds(x + index * 43, y + 29, 40, 20).build());
+            int end = Math.min(panel.cards().size(), 5);
+            for (int index = 0; index < end; index++) {
+                if (panel.cards().get(index).slot() < 0) {
+                    break;
+                }
+                Button tab = selector(Integer.toString(panel.cards().get(index).slot() + 1), index,
+                        x + index * 27, y + 29, 24);
                 tab.active = selected != index;
+            }
+            int specialIndex = 0;
+            while (specialIndex < panel.cards().size() && panel.cards().get(specialIndex).slot() >= 0) {
+                specialIndex++;
+            }
+            if (specialIndex < panel.cards().size()) {
+                int next = selected >= specialIndex && selected + 1 < panel.cards().size() ? selected + 1 : specialIndex;
+                int total = panel.cards().size() - specialIndex;
+                String label = "Отдельные заказы" + (total > 1 ? " · " + total : "");
+                selector(label, next, x + 141, y + 29, WIDTH - 165).active = next != selected;
             }
         }
 
@@ -68,6 +77,14 @@ final class ForemanScreen extends Screen {
 
     private ContractNetwork.Card selectedCard() {
         return selected < panel.cards().size() ? panel.cards().get(selected) : null;
+    }
+
+    private Button selector(String label, int index, int x, int y, int width) {
+        return addRenderableWidget(Button.builder(Component.literal(label), button -> {
+            selected = index;
+            materialOffset = 0;
+            rebuildWidgets();
+        }).bounds(x, y, width, 20).build());
     }
 
     private Button action(String label, ContractNetwork.Action action, int choice, int x, int y, int width) {
