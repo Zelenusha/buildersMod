@@ -258,7 +258,7 @@ public final class ContractEvents {
         data.setDirty();
     }
 
-    private static String deliverDemolition(ServerPlayer player, ContractData data, ContractData.Account account, UUID workId) {
+    static String deliverDemolition(ServerPlayer player, ContractData data, ContractData.Account account, UUID workId) {
         DemolitionWork work = account.failed.stream().filter(entry -> entry.id().equals(workId)).findFirst().orElse(null);
         ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
         if (work == null || site == null) {

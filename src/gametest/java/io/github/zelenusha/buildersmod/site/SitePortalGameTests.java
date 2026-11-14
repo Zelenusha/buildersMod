@@ -2,20 +2,32 @@ package io.github.zelenusha.buildersmod.site;
 
 import com.mojang.authlib.GameProfile;
 import io.github.zelenusha.buildersmod.BuildersMod;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.network.Connection;
+import net.minecraft.network.PacketSendListener;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.ServerGamePacketListenerImpl;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.BlockSnapshot;
 import net.minecraftforge.common.util.FakePlayer;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.level.BlockEvent;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
@@ -70,7 +82,72 @@ public class SitePortalGameTests {
         helper.succeed();
     }
 
-    private static void installOfficeFixture(ServerLevel overworld, FakePlayer owner, PortalLocation entrance) {
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void ownerTravelsThroughBothPortalsWithVanillaDimensionPackets(GameTestHelper helper) {
+        var server = helper.getLevel().getServer();
+        ServerLevel overworld = server.overworld();
+        ServerLevel site = server.getLevel(ConstructionSite.SITE_LEVEL);
+        helper.assertTrue(site != null, "The construction dimension must be registered");
+        PortalLocation entrance = new PortalLocation(helper.absolutePos(new BlockPos(0, 8, 0)), Direction.Axis.X,
+                helper.absolutePos(new BlockPos(1, 9, 3)));
+        ServerPlayer player = new ServerPlayer(server, overworld, new GameProfile(UUID.randomUUID(), "portal-roundtrip"));
+        RecordingConnection connection = new RecordingConnection(player);
+        long originalDayTime = overworld.getDayTime();
+
+        try {
+            installOfficeFixture(overworld, player, entrance);
+            moveTo(player, entrance.at(1, 1));
+            overworld.addNewPlayer(player);
+            helper.assertTrue(overworld.getEntity(player.getUUID()) == player, "The real player is registered in the source level");
+
+            overworld.setDayTime(4_000L);
+            connection.packets.clear();
+            triggerPortal(player);
+            assertArrival(helper, player, connection, overworld, site, ConstructionSite.SITE_ARRIVAL);
+            helper.assertTrue(site.getDayTime() == 4_000L, "Midday carries through the entry portal");
+
+            moveTo(player, ConstructionSite.RETURN_PORTAL.at(1, 1));
+            overworld.setDayTime(16_000L);
+            connection.packets.clear();
+            triggerPortal(player);
+            assertArrival(helper, player, connection, site, overworld, entrance.arrival());
+            helper.assertTrue(overworld.getDayTime() == 16_000L, "Night carries through the return portal");
+
+            connection.packets.clear();
+            triggerPortal(player);
+            helper.assertTrue(player.serverLevel() == overworld && connection.packets.stream()
+                    .noneMatch(ClientboundRespawnPacket.class::isInstance), "Standing at arrival must not send the player back");
+        } finally {
+            player.serverLevel().removePlayerImmediately(player, Entity.RemovalReason.DISCARDED);
+            overworld.setDayTime(originalDayTime);
+        }
+        helper.succeed();
+    }
+
+    private static void moveTo(ServerPlayer player, BlockPos block) {
+        player.moveTo(block.getX() + 0.5, block.getY(), block.getZ() + 0.5, 0.0F, 0.0F);
+    }
+
+    private static void triggerPortal(ServerPlayer player) {
+        MinecraftForge.EVENT_BUS.post(new TickEvent.PlayerTickEvent(TickEvent.Phase.END, player));
+    }
+
+    private static void assertArrival(GameTestHelper helper, ServerPlayer player, RecordingConnection connection,
+                                      ServerLevel source, ServerLevel target, BlockPos arrival) {
+        helper.assertTrue(player.serverLevel() == target && source.getEntity(player.getUUID()) == null
+                && target.getEntity(player.getUUID()) == player, "The real player must move between the two level entity managers");
+        helper.assertTrue(player.getX() == arrival.getX() + 0.5 && player.getY() == arrival.getY()
+                && player.getZ() == arrival.getZ() + 0.5, "The player must reach the exact protected arrival point");
+        helper.assertTrue(connection.packets.stream().anyMatch(packet -> packet instanceof ClientboundRespawnPacket respawn
+                && respawn.getDimension() == target.dimension()), "The client is told which dimension to load");
+        helper.assertTrue(connection.packets.stream().anyMatch(packet -> packet instanceof ClientboundPlayerPositionPacket position
+                && position.getX() == player.getX() && position.getY() == player.getY() && position.getZ() == player.getZ()),
+                "The client position packet matches the server arrival");
+        helper.assertTrue(connection.packets.stream().anyMatch(packet -> packet instanceof ClientboundSetTimePacket time
+                && Math.abs(time.getDayTime()) == target.getDayTime()), "The client receives the target time immediately");
+    }
+
+    private static void installOfficeFixture(ServerLevel overworld, ServerPlayer owner, PortalLocation entrance) {
         overworld.setBlock(entrance.arrival().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
         overworld.setBlock(entrance.arrival(), Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
         overworld.setBlock(entrance.arrival().above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
@@ -123,5 +200,18 @@ public class SitePortalGameTests {
 
     private static boolean breakCanceled(ServerLevel level, FakePlayer player, BlockPos pos) {
         return MinecraftForge.EVENT_BUS.post(new BlockEvent.BreakEvent(level, pos, level.getBlockState(pos), player));
+    }
+
+    private static final class RecordingConnection extends ServerGamePacketListenerImpl {
+        private final List<Packet<?>> packets = new ArrayList<>();
+
+        RecordingConnection(ServerPlayer player) {
+            super(player.server, new Connection(PacketFlow.SERVERBOUND), player);
+        }
+
+        @Override
+        public void send(Packet<?> packet, PacketSendListener listener) {
+            packets.add(packet);
+        }
     }
 }

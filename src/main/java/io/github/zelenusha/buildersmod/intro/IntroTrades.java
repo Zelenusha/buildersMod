@@ -3,7 +3,6 @@ package io.github.zelenusha.buildersmod.intro;
 import io.github.zelenusha.buildersmod.maintenance.WorkItems;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Holder;
 import net.minecraft.core.QuartPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
@@ -25,6 +24,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 final class IntroTrades {
     private static final String STOCK_DAY = "buildersmod_stock_day";
@@ -63,6 +64,13 @@ final class IntroTrades {
     }
 
     static void updateTrader(ServerLevel level, BlockPos dugout, WanderingTrader trader, long day) {
+        updateTrader(trader, day, level.getSeed() ^ dugout.asLong(), () -> level.getChunkSource().getGenerator()
+                .getBiomeSource().possibleBiomes().stream().flatMap(biome -> biome.unwrapKey().stream())
+                .collect(Collectors.toSet()), () -> nearbySourceBiomes(level, dugout));
+    }
+
+    static void updateTrader(WanderingTrader trader, long day, long seed, Supplier<Set<ResourceKey<Biome>>> possibleBiomes,
+                             Supplier<Set<ResourceKey<Biome>>> nearbyBiomes) {
         if (trader.getPersistentData().contains(STOCK_DAY)
                 && day == trader.getPersistentData().getLong(STOCK_DAY)) {
             if (trader.getPersistentData().getBoolean(EMPTY_STOCK)) {
@@ -73,16 +81,16 @@ final class IntroTrades {
         if (trader.getTradingPlayer() instanceof ServerPlayer customer) {
             customer.closeContainer();
         }
-        Set<Holder<Biome>> possible = level.getChunkSource().getGenerator().getBiomeSource().possibleBiomes();
-        Set<ResourceKey<Biome>> nearby = nearbySourceBiomes(level, dugout);
+        Set<ResourceKey<Biome>> possible = possibleBiomes.get();
+        Set<ResourceKey<Biome>> nearby = nearbyBiomes.get();
         List<Stock> candidates = new ArrayList<>();
         for (Stock candidate : MATERIALS) {
             if (candidate.biomes().stream().noneMatch(nearby::contains)
-                    && possible.stream().anyMatch(biome -> candidate.biomes().stream().anyMatch(biome::is))) {
+                    && candidate.biomes().stream().anyMatch(possible::contains)) {
                 candidates.add(candidate);
             }
         }
-        Collections.shuffle(candidates, new Random(level.getSeed() ^ dugout.asLong() ^ day));
+        Collections.shuffle(candidates, new Random(seed ^ day));
 
         MerchantOffers offers = trader.getOffers();
         offers.clear();

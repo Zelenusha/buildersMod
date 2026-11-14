@@ -83,6 +83,53 @@ public class DemolitionGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = "empty")
+    public static void deliversTheSecondDemolitionBeforeTheFirst(GameTestHelper helper) {
+        ServerLevel site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        BlockPos firstAnchor = new BlockPos(327, ConstructionSite.START_FLOOR_Y + 1, 259);
+        BlockPos secondAnchor = firstAnchor.east(32);
+        RoomBlueprint firstRoom = SampleRoomBlueprint.at(firstAnchor, Direction.NORTH);
+        RoomBlueprint secondRoom = SampleRoomBlueprint.at(secondAnchor, Direction.NORTH);
+        var player = FakePlayerFactory.get(site, new GameProfile(UUID.randomUUID(), "demolition-order"));
+        ContractData data = ContractData.get(site.getServer());
+        var account = data.account(player.getUUID());
+        var first = new DemolitionWork(order(firstAnchor, firstRoom, DemolitionWork.snapshot(site, firstRoom)));
+        var second = new DemolitionWork(order(secondAnchor, secondRoom, DemolitionWork.snapshot(site, secondRoom)));
+        account.failed.add(first);
+        account.failed.add(second);
+        BlockPos firstWall = firstRoom.bounds().min().above();
+        BlockPos glass = firstWall.above();
+        BlockPos secondWall = secondRoom.bounds().min().above();
+        try {
+            site.setBlock(firstWall, Blocks.OAK_PLANKS.defaultBlockState(), Block.UPDATE_ALL);
+            site.setBlock(glass, Blocks.GLASS.defaultBlockState(), Block.UPDATE_ALL);
+            site.setBlock(secondWall, Blocks.BIRCH_PLANKS.defaultBlockState(), Block.UPDATE_ALL);
+            helper.assertTrue(player.gameMode.destroyBlock(firstWall), "The first task's wood must drop");
+            helper.assertTrue(player.gameMode.destroyBlock(secondWall), "The second task's wood must drop");
+            helper.assertTrue(second.readyToDeliver(site), "The second demolition can be submitted while the first has glass");
+            helper.assertTrue(first.materials().equals(Map.of(Items.OAK_PLANKS, 1)), "The first task owes one oak plank");
+            helper.assertTrue(second.materials().equals(Map.of(Items.BIRCH_PLANKS, 1)), "The second task owes one birch plank");
+
+            var inventory = player.getInventory();
+            inventory.setItem(0, new ItemStack(Items.OAK_PLANKS));
+            inventory.setItem(1, new ItemStack(Items.BIRCH_PLANKS, 2));
+            ContractEvents.deliverDemolition(player, data, account, second.id());
+            helper.assertTrue(account.failed.size() == 1 && account.failed.get(0).id().equals(first.id()),
+                    "Submitting the second task leaves the first active");
+            helper.assertTrue(inventory.getItem(0).getCount() == 1 && inventory.getItem(1).getCount() == 1,
+                    "Submitting the second task consumes its material only");
+            ContractEvents.deliverDemolition(player, data, account, second.id());
+            helper.assertTrue(inventory.getItem(1).getCount() == 1, "Repeating the second submission consumes nothing");
+
+            helper.assertTrue(player.gameMode.destroyBlock(glass), "The first room must be fully dismantled before delivery");
+            ContractEvents.deliverDemolition(player, data, account, first.id());
+            helper.assertTrue(account.failed.isEmpty() && inventory.getItem(0).isEmpty(), "The first task can then be completed");
+        } finally {
+            account.failed.clear();
+        }
+        helper.succeed();
+    }
+
     private static ContractData.Accepted order(BlockPos anchor, RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) {
         return new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, 0, false,
                 blueprint, 5, ContractData.Kind.ROOM, 0, 0, originals);
