@@ -38,8 +38,16 @@ final class OfferFactory {
         List<SiteDoor> doors = doors(account);
         List<RoomBlueprint.Bounds> occupied = occupied(account);
         for (int slot = 0; slot < account.offers.length; slot++) {
-            if (account.offers[slot] != null) {
+            if (account.offers[slot] != null || slot >= 3 && account.incidentOffers[slot - 3] != null) {
                 continue;
+            }
+            if (slot >= 3) {
+                var incident = IncidentWork.chooseOffer(account, player.getRandom(), slot);
+                if (incident != null && (slot == 3 || player.getRandom().nextBoolean())) {
+                    account.incidentOffers[slot - 3] = incident;
+                    data.setDirty();
+                    continue;
+                }
             }
             ContractData.Accepted offer = slot == 0 && account.sequence == 0 ? sample(slot) : null;
             if (offer == null) {

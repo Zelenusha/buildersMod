@@ -34,9 +34,8 @@ final class ForemanScreen extends Screen {
             return;
         }
 
-        boolean active = panel.state() == ContractNetwork.State.ACTIVE;
         ContractNetwork.Card card = selectedCard();
-        if (!active) {
+        {
             int end = Math.min(panel.cards().size(), 5);
             for (int index = 0; index < end; index++) {
                 if (panel.cards().get(index).slot() < 0) {
@@ -58,8 +57,13 @@ final class ForemanScreen extends Screen {
             }
         }
 
-        if (active && card != null) {
-            action("Сдать", ContractNetwork.Action.SUBMIT, 0, x, y + 150, 55);
+        if (card != null && card.incidentId() != null) {
+            addRenderableWidget(Button.builder(Component.literal("Сдать работу"), button -> {
+                button.active = false;
+                ContractNetwork.request(panel.foreman(), ContractNetwork.Action.SUBMIT, 0, card.incidentId());
+            }).bounds(x, y + 150, WIDTH - 24, 20).build());
+        } else if (isActiveConstruction(card)) {
+            action("Сдать", ContractNetwork.Action.SUBMIT, 0, x, y + 150, 55).active = panel.pauseReason().isEmpty();
             action("Отменить", ContractNetwork.Action.CANCEL, 0, x + 60, y + 150, 70);
             int price = ContractBalance.Difficulty.values()[card.level() - 1].extraDayPrice();
             Button extra = action("Доп. сутки — " + price + " изумр.", ContractNetwork.Action.BUY_TIME, 0,
@@ -79,6 +83,10 @@ final class ForemanScreen extends Screen {
 
     private ContractNetwork.Card selectedCard() {
         return selected < panel.cards().size() ? panel.cards().get(selected) : null;
+    }
+
+    private boolean isActiveConstruction(ContractNetwork.Card card) {
+        return card != null && panel.state() == ContractNetwork.State.ACTIVE && card.available() && card.remaining() >= 0;
     }
 
     private Button selector(String label, int index, int x, int y, int width) {
@@ -107,6 +115,10 @@ final class ForemanScreen extends Screen {
         if (panel.dialogue()) {
             graphics.drawWordWrap(font, Component.literal("Работа у нас найдётся. Посмотрим, что ты умеешь строить."),
                     x + 12, y + 44, WIDTH - 24, 0xE4E9ED);
+            if (!panel.lastCall().isEmpty()) {
+                graphics.drawWordWrap(font, Component.literal("Последний звонок · " + panel.lastCall()),
+                        x + 12, y + 79, WIDTH - 24, 0x8BCCF3);
+            }
         } else {
             renderOrder(graphics, mouseX, mouseY, x + 12, y + 55);
         }
@@ -119,18 +131,28 @@ final class ForemanScreen extends Screen {
 
     private void renderOrder(GuiGraphics graphics, int mouseX, int mouseY, int x, int y) {
         ContractNetwork.Card card = selectedCard();
-        boolean active = panel.state() == ContractNetwork.State.ACTIVE;
+        boolean active = isActiveConstruction(card);
         if (card == null) {
             String message = panel.state() == ContractNetwork.State.NOT_READY ? "Первые заказы появятся завтра." : "Нет места.";
             graphics.drawString(font, message, x, y, 0xE4E9ED, false);
             return;
         }
-        graphics.drawString(font, card.title() + " · ур. " + card.level() + (active ? " · в работе" : ""),
+        boolean paused = active && !panel.pauseReason().isEmpty();
+        String state = paused ? " · на паузе" : active || card.incidentId() != null ? " · в работе" : "";
+        graphics.drawString(font, card.title() + " · ур. " + card.level() + state,
                 x, y, 0x8BCCF3, false);
-        String header = "Оплата " + card.wage() + " / " + (card.wage() + card.bonus()) + " · " + ContractClient.days(card.remaining());
+        String header = "Оплата " + card.wage() + " / " + (card.wage() + card.bonus())
+                + (card.remaining() >= 0 ? " · " + ContractClient.days(card.remaining()) : " · без срока");
         graphics.drawString(font, header, x, y + 11, 0xE4E9ED, false);
-        if (!card.available()) {
-            graphics.drawString(font, "Нет места за подходящим проёмом", x, y + 22, 0xF3D88C, false);
+        if (paused) {
+            graphics.drawString(font, "Причина паузы · " + panel.pauseReason(), x, y + 22, 0xF3D88C, false);
+        } else if (card.remaining() < 0) {
+            graphics.drawString(font, "Комната на стройке · " + card.bonusLabel(), x, y + 22, 0xE4E9ED, false);
+            if (card.canParallel() && card.incidentId() == null) {
+                graphics.drawString(font, "Можно принять дополнительно", x, y + 33, 0x91DE92, false);
+            }
+        } else if (!card.available() && card.remaining() >= 0) {
+            graphics.drawString(font, "Заказ сейчас недоступен", x, y + 22, 0xF3D88C, false);
         } else if (!card.bonusLabel().isEmpty()) {
             String label = Component.translatable(card.bonusLabel()).getString();
             String amount = active ? card.bonusFound() + "/" + card.bonusTarget() : "×" + card.bonusTarget();

@@ -1,6 +1,7 @@
 package io.github.zelenusha.buildersmod;
 
 import io.github.zelenusha.buildersmod.contract.ContractNetwork;
+import io.github.zelenusha.buildersmod.contract.IncidentWork;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
 import io.github.zelenusha.buildersmod.maintenance.WorkItems;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
@@ -17,5 +18,6 @@ public final class BuildersMod {
         WorkItems.register(context.getModEventBus());
         IntroEvents.register(MinecraftForge.EVENT_BUS);
         ContractNetwork.register();
+        IncidentWork.register();
     }
 }

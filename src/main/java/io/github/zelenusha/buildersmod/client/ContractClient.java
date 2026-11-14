@@ -10,12 +10,15 @@ import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
@@ -35,6 +38,11 @@ public final class ContractClient {
     private static String title;
     private static long remaining;
     private static boolean visible = true;
+    private static List<String> tasks = List.of();
+    private static boolean paused;
+    private static String call;
+    private static int callTicks;
+    private static final ResourceLocation FOREMAN_HEAD = ResourceLocation.withDefaultNamespace("textures/entity/villager/villager.png");
 
     private ContractClient() { }
 
@@ -48,6 +56,16 @@ public final class ContractClient {
 
     public static void openFines(ContractNetwork.FinePanel panel) {
         Minecraft.getInstance().setScreen(new FineScreen(panel));
+    }
+
+    public static void updateTasks(List<String> names, boolean isPaused) {
+        tasks = names;
+        paused = isPaused;
+    }
+
+    public static void showCall(String message) {
+        call = message;
+        callTicks = 160;
     }
 
     public static void updateSite(ContractNetwork.SiteView view) {
@@ -89,6 +107,9 @@ public final class ContractClient {
     @SubscribeEvent
     public static void logOut(ClientPlayerNetworkEvent.LoggingOut event) {
         clear();
+        tasks = List.of();
+        paused = false;
+        callTicks = 0;
     }
 
     @SubscribeEvent
@@ -96,6 +117,10 @@ public final class ContractClient {
         if (event.phase == TickEvent.Phase.END) {
             while (TOGGLE.consumeClick()) {
                 visible = !visible;
+            }
+            Minecraft game = Minecraft.getInstance();
+            if (callTicks > 0 && game.screen == null && game.level != null && !game.options.hideGui) {
+                callTicks--;
             }
         }
     }
@@ -159,11 +184,33 @@ public final class ContractClient {
         @SubscribeEvent
         public static void overlay(RegisterGuiOverlaysEvent event) {
             event.registerAboveAll("contract_notice", (gui, graphics, partialTick, width, height) -> {
-                if (blueprint != null && !Minecraft.getInstance().options.hideGui) {
-                    String text = title + " — " + days(remaining);
-                    var font = Minecraft.getInstance().font;
-                    graphics.fill(5, 5, 12 + font.width(text), 21, 0xA0232A33);
-                    graphics.drawString(font, text, 8, 9, 0xFFFFFF, false);
+                Minecraft game = Minecraft.getInstance();
+                if (game.options.hideGui) {
+                    return;
+                }
+                var font = game.font;
+                int y = 5;
+                var labels = new java.util.ArrayList<String>();
+                if (blueprint != null) {
+                    labels.add(title + (paused ? " · пауза" : "") + " — " + days(remaining));
+                }
+                labels.addAll(tasks);
+                for (String text : labels) {
+                    graphics.fill(5, y, 12 + font.width(text), y + 15, 0xA0232A33);
+                    graphics.drawString(font, text, 8, y + 4, 0xFFFFFF, false);
+                    y += 16;
+                }
+                if (callTicks > 0 && game.screen == null) {
+                    int textWidth = Math.min(width / 2 - 36, 200);
+                    if (textWidth > 30) {
+                        int x = width - textWidth - 32;
+                        var message = Component.literal(call);
+                        int bottom = 30 + font.wordWrapHeight(call, textWidth);
+                        graphics.fill(x, 5, width - 5, bottom, 0xD0232A33);
+                        graphics.blit(FOREMAN_HEAD, x + 5, 11, 16, 20, 8.0F, 8.0F, 8, 10, 64, 64);
+                        graphics.drawString(font, "Прораб", x + 25, 10, 0x8BCCF3, false);
+                        graphics.drawWordWrap(font, message, x + 25, 22, textWidth, 0xFFFFFF);
+                    }
                 }
             });
         }

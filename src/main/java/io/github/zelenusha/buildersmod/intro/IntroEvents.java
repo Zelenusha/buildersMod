@@ -1,5 +1,7 @@
 package io.github.zelenusha.buildersmod.intro;
 
+import io.github.zelenusha.buildersmod.contract.IncidentWork;
+
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.Commands;
@@ -252,6 +254,7 @@ public final class IntroEvents {
         work.dugout = sites.dugout();
         work.office = office;
         work.firstOffersDay = day(level) + 1;
+        IncidentWork.startClock(player);
         work.trader = trader.getUUID();
         data.setDirty();
 

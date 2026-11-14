@@ -32,7 +32,7 @@ public final class ContractNetwork {
 
     public record Card(int slot, String title, int level, int wage, int bonus, long remaining, boolean available,
                        boolean canBuyTime, int missing, String bonusLabel, int bonusFound, int bonusTarget,
-                       List<Material> materials) {
+                       List<Material> materials, UUID incidentId, boolean canParallel) {
         void write(FriendlyByteBuf buffer) {
             buffer.writeVarInt(slot).writeUtf(title, 128).writeVarInt(level).writeVarInt(wage).writeVarInt(bonus)
                     .writeVarLong(remaining);
@@ -40,17 +40,20 @@ public final class ContractNetwork {
             buffer.writeBoolean(canBuyTime);
             buffer.writeVarInt(missing).writeUtf(bonusLabel, 128).writeVarInt(bonusFound).writeVarInt(bonusTarget);
             buffer.writeCollection(materials, (buf, material) -> material.write(buf));
+            buffer.writeNullable(incidentId, FriendlyByteBuf::writeUUID);
+            buffer.writeBoolean(canParallel);
         }
 
         static Card read(FriendlyByteBuf buffer) {
             return new Card(buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(),
                     buffer.readVarInt(), buffer.readVarLong(), buffer.readBoolean(), buffer.readBoolean(),
-                    buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(), buffer.readList(Material::read));
+                    buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(), buffer.readList(Material::read),
+                    buffer.readNullable(FriendlyByteBuf::readUUID), buffer.readBoolean());
         }
     }
 
     public record Panel(UUID foreman, boolean dialogue, State state, long unpaid, int completed,
-                        List<Card> cards, int failed, int fineCount, String feedback) {
+                        List<Card> cards, int failed, int fineCount, String feedback, String lastCall, String pauseReason) {
         static void write(Panel value, FriendlyByteBuf buffer) {
             buffer.writeUUID(value.foreman);
             buffer.writeBoolean(value.dialogue);
@@ -58,6 +61,7 @@ public final class ContractNetwork {
             buffer.writeVarLong(value.unpaid).writeVarInt(value.completed).writeVarInt(value.failed).writeVarInt(value.fineCount);
             buffer.writeCollection(value.cards, (buf, card) -> card.write(buf));
             buffer.writeUtf(value.feedback, 256);
+            buffer.writeUtf(value.lastCall, 512).writeUtf(value.pauseReason, 128);
         }
 
         static Panel read(FriendlyByteBuf buffer) {
@@ -69,7 +73,7 @@ public final class ContractNetwork {
             int failed = buffer.readVarInt();
             int fineCount = buffer.readVarInt();
             return new Panel(foreman, dialogue, state, unpaid, completed, buffer.readList(Card::read), failed, fineCount,
-                    buffer.readUtf(256));
+                    buffer.readUtf(256), buffer.readUtf(512), buffer.readUtf(128));
         }
     }
 
@@ -158,7 +162,7 @@ public final class ContractNetwork {
         }
     }
 
-    private static final String PROTOCOL = "4";
+    private static final String PROTOCOL = "5";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "contracts"), () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals);
 
@@ -193,6 +197,14 @@ public final class ContractNetwork {
                 .encoder(FinePanel::write).decoder(FinePanel::read)
                 .consumerMainThread((panel, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
                         () -> () -> ContractClient.openFines(panel))).add();
+        CHANNEL.messageBuilder(TaskView.class, 6, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(TaskView::write).decoder(TaskView::read)
+                .consumerMainThread((view, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
+                        () -> () -> ContractClient.updateTasks(view.names(), view.paused()))).add();
+        CHANNEL.messageBuilder(Call.class, 7, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder((view, buf) -> buf.writeUtf(view.message(), 512)).decoder(buf -> new Call(buf.readUtf(512)))
+                .consumerMainThread((view, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
+                        () -> () -> ContractClient.showCall(view.message()))).add();
     }
 
     static void sendPanel(ServerPlayer player, Panel panel) {
@@ -214,6 +226,27 @@ public final class ContractNetwork {
 
     static void syncTimer(ServerPlayer player, ContractData.Accepted order, long remaining) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new TimerView(order != null, remaining));
+    }
+
+    static void tasks(ServerPlayer player, List<String> names, boolean paused) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new TaskView(names, paused));
+    }
+
+    static void call(ServerPlayer player, String text) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new Call(text));
+    }
+
+    private record Call(String message) { }
+
+    private record TaskView(List<String> names, boolean paused) {
+        static void write(TaskView view, FriendlyByteBuf buf) {
+            buf.writeCollection(view.names, (target, name) -> target.writeUtf(name, 128));
+            buf.writeBoolean(view.paused);
+        }
+
+        static TaskView read(FriendlyByteBuf buf) {
+            return new TaskView(buf.readList(source -> source.readUtf(128)), buf.readBoolean());
+        }
     }
 
     private record TimerView(boolean active, long remaining) {

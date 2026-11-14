@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
+import io.github.zelenusha.buildersmod.maintenance.IncidentState;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -86,6 +87,15 @@ public final class ContractData extends SavedData {
         final List<Accepted> courtyards = new ArrayList<>();
         final List<Accepted> rooms = new ArrayList<>();
         final List<DemolitionWork> failed = new ArrayList<>();
+        IncidentState.Schedule incidentSchedule;
+        IncidentWork.Offer pendingIncident;
+        final IncidentWork.Offer[] incidentOffers = new IncidentWork.Offer[2];
+        final List<IncidentState> incidents = new ArrayList<>();
+        final Map<UUID, Integer> incidentSlots = new HashMap<>();
+        io.github.zelenusha.buildersmod.maintenance.FireRepair fireRepair;
+        final Map<BlockPos, List<UUID>> failedEvictions = new HashMap<>();
+        long pausedAt = -1;
+        String lastCall = "";
     }
 
     private final Map<UUID, Account> accounts = new HashMap<>();
@@ -107,6 +117,21 @@ public final class ContractData extends SavedData {
         if (ticks > 0) {
             sleepTicks += ticks;
             setDirty();
+        }
+    }
+
+    void recordEvictionDeath(net.minecraft.world.entity.LivingEntity entity) {
+        for (Account account : accounts.values()) {
+            for (IncidentState incident : account.incidents) {
+                if (io.github.zelenusha.buildersmod.maintenance.IncidentWorld.recordEvictionDeath(incident, entity)) {
+                    setDirty();
+                }
+            }
+            for (List<UUID> survivors : account.failedEvictions.values()) {
+                if (survivors.remove(entity.getUUID())) {
+                    setDirty();
+                }
+            }
         }
     }
 
@@ -149,6 +174,7 @@ public final class ContractData extends SavedData {
                     account.failed.add(DemolitionWork.load(order, failure.getCompound("Demolition")));
                 }
             }
+            loadIncidents(player, account);
         }
         return data;
     }
@@ -246,6 +272,83 @@ public final class ContractData extends SavedData {
         return tags;
     }
 
+    private static void loadIncidents(CompoundTag player, Account account) {
+        if (player.contains("IncidentSchedule", Tag.TAG_COMPOUND)) {
+            account.incidentSchedule = IncidentState.Schedule.load(player.getCompound("IncidentSchedule"));
+        }
+        account.pendingIncident = IncidentWork.Offer.load(player.getCompound("PendingIncident"));
+        for (int index = 0; index < account.incidentOffers.length; index++) {
+            account.incidentOffers[index] = IncidentWork.Offer.load(player.getCompound("IncidentOffer" + index));
+        }
+        ListTag active = player.getList("Incidents", Tag.TAG_COMPOUND);
+        for (int index = 0; index < active.size(); index++) {
+            CompoundTag entry = active.getCompound(index);
+            IncidentState incident = IncidentState.load(entry);
+            account.incidents.add(incident);
+            if (entry.contains("Slot")) {
+                account.incidentSlots.put(incident.id(), entry.getInt("Slot"));
+            }
+        }
+        ListTag evictions = player.getList("FailedEvictions", Tag.TAG_COMPOUND);
+        for (int index = 0; index < evictions.size(); index++) {
+            CompoundTag entry = evictions.getCompound(index);
+            ListTag targets = entry.getList("Survivors", Tag.TAG_COMPOUND);
+            List<UUID> ids = new ArrayList<>();
+            for (int target = 0; target < targets.size(); target++) {
+                ids.add(targets.getCompound(target).getUUID("Id"));
+            }
+            account.failedEvictions.put(BlockPos.of(entry.getLong("Room")), ids);
+        }
+        if (player.contains("FireRepair", Tag.TAG_COMPOUND)) {
+            account.fireRepair = io.github.zelenusha.buildersmod.maintenance.FireRepair.load(player.getCompound("FireRepair"));
+        }
+        account.pausedAt = player.contains("PausedAt") ? player.getLong("PausedAt") : -1;
+        account.lastCall = player.getString("LastCall");
+    }
+
+    private static void saveIncidents(CompoundTag player, Account account) {
+        if (account.incidentSchedule != null) {
+            player.put("IncidentSchedule", account.incidentSchedule.save());
+        }
+        if (account.pendingIncident != null) {
+            player.put("PendingIncident", account.pendingIncident.save());
+        }
+        for (int index = 0; index < account.incidentOffers.length; index++) {
+            if (account.incidentOffers[index] != null) {
+                player.put("IncidentOffer" + index, account.incidentOffers[index].save());
+            }
+        }
+        ListTag active = new ListTag();
+        for (IncidentState incident : account.incidents) {
+            CompoundTag entry = incident.save();
+            Integer slot = account.incidentSlots.get(incident.id());
+            if (slot != null) {
+                entry.putInt("Slot", slot);
+            }
+            active.add(entry);
+        }
+        player.put("Incidents", active);
+        ListTag evictions = new ListTag();
+        account.failedEvictions.forEach((room, ids) -> {
+            var entry = new CompoundTag();
+            entry.putLong("Room", room.asLong());
+            var targets = new ListTag();
+            for (UUID id : ids) {
+                var target = new CompoundTag();
+                target.putUUID("Id", id);
+                targets.add(target);
+            }
+            entry.put("Survivors", targets);
+            evictions.add(entry);
+        });
+        player.put("FailedEvictions", evictions);
+        if (account.fireRepair != null) {
+            player.put("FireRepair", account.fireRepair.save());
+        }
+        player.putLong("PausedAt", account.pausedAt);
+        player.putString("LastCall", account.lastCall);
+    }
+
     @Override
     public CompoundTag save(CompoundTag root) {
         ListTag players = new ListTag();
@@ -282,6 +385,7 @@ public final class ContractData extends SavedData {
                 failures.add(failure);
             });
             player.put("Failed", failures);
+            saveIncidents(player, account);
             players.add(player);
         });
         root.putInt("Version", 2);

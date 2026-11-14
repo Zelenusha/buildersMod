@@ -3,12 +3,16 @@ package io.github.zelenusha.buildersmod.contract;
 import io.github.zelenusha.buildersmod.BuildersMod;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
+import io.github.zelenusha.buildersmod.maintenance.GraffitiEvents;
+import io.github.zelenusha.buildersmod.maintenance.IncidentState;
+import io.github.zelenusha.buildersmod.maintenance.IncidentWorld;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -69,10 +73,12 @@ public final class ContractEvents {
         for (ServerPlayer player : event.getServer().getPlayerList().getPlayers()) {
             ContractData.Account account = data.account(player.getUUID());
             boolean expired = checkDeadline(player, data, account);
-            if (expired || (account.active != null && now % 120 == 0)) {
+            int activeIncidents = account.incidents.size();
+            IncidentWork.tick(player, data, account, now);
+            if (expired || activeIncidents != account.incidents.size() || now % 120 == 0) {
                 sync(player, data, account);
             } else if (account.active != null && now % 20 == 0) {
-                ContractNetwork.syncTimer(player, account.active, Math.max(0, account.active.deadline() - now));
+                ContractNetwork.syncTimer(player, account.active, remaining(account, now));
             }
         }
     }
@@ -89,7 +95,7 @@ public final class ContractEvents {
         String feedback = switch (action) {
             case SHOW_ORDERS, SHOW_DEMOLITIONS, SHOW_FINES -> "";
             case ACCEPT -> accept(player, data, account, choice);
-            case SUBMIT -> submit(player, data, account);
+            case SUBMIT -> workId != null ? submitIncident(player, data, account, workId) : submit(player, data, account);
             case CANCEL -> cancel(player, data, account);
             case CLAIM -> claim(player, data, account);
             case BUY_TIME -> buyTime(player, data, account);
@@ -109,7 +115,7 @@ public final class ContractEvents {
     }
 
     private static String accept(ServerPlayer player, ContractData data, ContractData.Account account, int slot) {
-        if (account.active != null || !offersAreReady(player)) {
+        if (!offersAreReady(player)) {
             return "Сейчас этот заказ недоступен.";
         }
         ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
@@ -117,6 +123,17 @@ public final class ContractEvents {
             return "Сейчас этот заказ недоступен.";
         }
         OfferFactory.fill(player, data, account);
+        if (slot >= 3 && account.incidentOffers[slot - 3] != null) {
+            var offer = account.incidentOffers[slot - 3];
+            if (account.incidentSlots.containsKey(offer.id())) {
+                return "Этот заказ уже выполняется.";
+            }
+            return IncidentWork.accept(player, data, account, offer)
+                    ? "Заказ принят. Начни работу на стройке." : "Эту работу сейчас нельзя принять.";
+        }
+        if (account.active != null) {
+            return "Сначала закончи текущую постройку.";
+        }
         ContractData.Accepted selected;
         if (slot == -1) {
             selected = hasAvailableRoom(site, account) ? null : OfferFactory.extension(site, account);
@@ -131,6 +148,9 @@ public final class ContractEvents {
         }
         if (selected == null) {
             return "Нет места за подходящим проёмом.";
+        }
+        if (selected.kind() != ContractData.Kind.STAIRS && account.incidents.stream().anyMatch(work -> work.kind().pausesConstruction())) {
+            return "Сначала закончи работу, которая приостанавливает стройку.";
         }
         if (selected.kind() == ContractData.Kind.ROOM || selected.kind() == ContractData.Kind.SAMPLE) {
             selected = selected.rebound(selected.anchor(), selected.outward(), selected.blueprint(),
@@ -149,6 +169,9 @@ public final class ContractEvents {
     private static String submit(ServerPlayer player, ContractData data, ContractData.Account account) {
         if (account.active == null) {
             return "Нет активной постройки.";
+        }
+        if (account.pausedAt >= 0) {
+            return "Сначала закончи задание, приостановившее стройку.";
         }
         if (account.stairInspection == ContractData.StairInspection.NEEDS_REPAIR_DAY) {
             return "Купи сутки на восстановление лестницы перед повторной сдачей.";
@@ -182,7 +205,7 @@ public final class ContractEvents {
 
     private static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
-        if (order == null || order.deadline() > data.time(player.server)
+        if (order == null || account.pausedAt >= 0 || order.deadline() > data.time(player.server)
                 || account.stairInspection != ContractData.StairInspection.WAITING) {
             return false;
         }
@@ -203,7 +226,9 @@ public final class ContractEvents {
             account.active = order.withDeadline(data.time(player.server) + order.difficulty().duration(), order.lateCount() + 1);
             retainSpecial(account, account.active);
             data.setDirty();
-            player.sendSystemMessage(Component.literal("Прораб: Срок продлён. Штраф: " + fine + " изумрудов."));
+            account.lastCall = "Опять недострой. Штраф " + fine + " изумрудов. Даю ещё "
+                    + order.difficulty().duration() / ContractBalance.TICKS_PER_DAY + " дн. на тот же заказ.";
+            ContractNetwork.call(player, account.lastCall);
         } else {
             fail(data, account, order, ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()),
                     "Недострой в срок", fineAudacity(player, 0, 0));
@@ -228,6 +253,7 @@ public final class ContractEvents {
         account.pendingCourtyard = null;
         account.sequence++;
         account.active = null;
+        account.pausedAt = -1;
         account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
     }
@@ -238,7 +264,7 @@ public final class ContractEvents {
         if (work == null || site == null) {
             return "Этот снос сейчас недоступен.";
         }
-        if (!work.readyToDeliver(site)) {
+        if (!withLoadedArea(site, work.order().blueprint().bounds(), () -> work.readyToDeliver(site))) {
             return "Разбери постройку и восстанови исходные блоки пола.";
         }
         if (!work.deliver(player.getInventory())) {
@@ -355,6 +381,7 @@ public final class ContractEvents {
         }
         account.unpaid += account.fines.apply(wage);
         account.active = null;
+        account.pausedAt = -1;
         account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
     }
@@ -411,7 +438,72 @@ public final class ContractEvents {
     }
 
     private static boolean canBuyTime(ContractData.Account account) {
-        return account.stairInspection.canBuyDay(account.active.extraDay());
+        return account.pausedAt < 0 && account.stairInspection.canBuyDay(account.active.extraDay());
+    }
+
+    private static String submitIncident(ServerPlayer player, ContractData data, ContractData.Account account, UUID id) {
+        var incident = account.incidents.stream().filter(work -> work.id().equals(id)).findFirst().orElse(null);
+        ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
+        if (incident == null || site == null) {
+            return "Такого активного задания сейчас нет.";
+        }
+        var wage = IncidentWork.submit(site, account, incident);
+        if (incident.kind() == IncidentState.Kind.FIRE) {
+            data.setDirty();
+        }
+        if (wage.isEmpty()) {
+            return "Работа пока не готова. Проверь указанную комнату.";
+        }
+        if (incident.kind() == IncidentState.Kind.CLEANUP) {
+            GraffitiEvents.remove(site, id);
+        }
+        account.unpaid += account.fines.apply(wage.getAsInt());
+        IncidentWork.finish(player, data, account, incident);
+        return "Работа принята. Зарплата у прораба.";
+    }
+
+    @SubscribeEvent
+    public static void onDeath(net.minecraftforge.event.entity.living.LivingDeathEvent event) {
+        if (!(event.getEntity().level() instanceof ServerLevel level)) {
+            return;
+        }
+        ContractData data = ContractData.get(level.getServer());
+        if (event.getEntity() instanceof ServerPlayer player) {
+            var account = data.account(player.getUUID());
+            for (var work : List.copyOf(account.incidents)) {
+                if (work.recordPlayerDeath()) {
+                    account.failedEvictions.computeIfAbsent(work.originRoom(), key -> new ArrayList<>())
+                            .addAll(work.remainingEvictionTargets());
+                    IncidentWork.finish(player, data, account, work);
+                }
+            }
+        } else if (level.dimension() == ConstructionSite.SITE_LEVEL) {
+            data.recordEvictionDeath(event.getEntity());
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.MONITOR)
+    public static void onFloodFill(net.minecraftforge.event.level.BlockEvent.EntityPlaceEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player) || player.serverLevel().dimension() != ConstructionSite.SITE_LEVEL) {
+            return;
+        }
+        var snapshots = event instanceof net.minecraftforge.event.level.BlockEvent.EntityMultiPlaceEvent multi
+                ? multi.getReplacedBlockSnapshots() : List.of(event.getBlockSnapshot());
+        var data = ContractData.get(player.server);
+        var account = data.account(player.getUUID());
+        for (var incident : account.incidents) {
+            var room = IncidentWork.room(account, incident.originRoom());
+            if (incident.kind() != IncidentState.Kind.FLOOD || room == null) {
+                continue;
+            }
+            for (var snapshot : snapshots) {
+                var previous = snapshot.getReplacedBlock();
+                if (room.blueprint().containsInterior(snapshot.getPos())
+                        && (previous.isAir() || previous.is(Blocks.WATER)) && incident.recordFloodFill(snapshot.getPos())) {
+                    data.setDirty();
+                }
+            }
+        }
     }
 
     private static void retainSpecial(ContractData.Account account, ContractData.Accepted order) {
@@ -428,12 +520,21 @@ public final class ContractEvents {
             return null;
         }
         RoomBlueprint room = order.blueprint();
+        return withLoadedArea(site, room.bounds(), () -> room.check(site));
+    }
+
+    static <T> T withLoadedArea(ServerLevel site, RoomBlueprint.Bounds bounds, Supplier<T> work) {
+        return withLoadedAreas(site, List.of(bounds), work);
+    }
+
+    static <T> T withLoadedAreas(ServerLevel site, List<RoomBlueprint.Bounds> areas, Supplier<T> work) {
         var chunks = site.getChunkSource();
-        List<ChunkPos> held = ChunkPos.rangeClosed(new ChunkPos(room.bounds().min()), new ChunkPos(room.bounds().max())).toList();
+        List<ChunkPos> held = areas.stream().flatMap(bounds -> ChunkPos.rangeClosed(new ChunkPos(bounds.min()),
+                new ChunkPos(bounds.max()))).distinct().toList();
         held.forEach(pos -> chunks.addRegionTicket(CHECK_TICKET, pos, 0, pos));
         try {
             held.forEach(pos -> site.getChunk(pos.x, pos.z));
-            return room.check(site);
+            return work.get();
         } finally {
             held.forEach(pos -> chunks.removeRegionTicket(CHECK_TICKET, pos, 0, pos));
         }
@@ -461,14 +562,20 @@ public final class ContractEvents {
         ContractNetwork.State state = ContractNetwork.State.NOT_READY;
         if (!dialogue && order != null) {
             state = ContractNetwork.State.ACTIVE;
-            cards.add(card(order, check(player, order), Math.max(0, order.deadline() - data.time(player.server)), true,
+            cards.add(card(order, check(player, order), remaining(account, data.time(player.server)), true,
                     canBuyTime(account)));
+            OfferFactory.fill(player, data, account);
+            for (var offer : account.offers) {
+                if (offer != null && offer.slot() != order.slot()) {
+                    cards.add(card(offer, null, offer.difficulty().duration(), false, false));
+                }
+            }
         } else if (!dialogue && offersAreReady(player)) {
             ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
             if (site != null) {
                 OfferFactory.fill(player, data, account);
                 for (ContractData.Accepted offer : account.offers) {
-                    if (offer != null) {
+                    if (offer != null && (offer.slot() < 3 || account.incidentOffers[offer.slot() - 3] == null)) {
                         cards.add(card(offer, null, offer.difficulty().duration(),
                                 OfferFactory.bind(site, account, offer) != null, false));
                     }
@@ -486,8 +593,29 @@ public final class ContractEvents {
             state = cards.stream().anyMatch(ContractNetwork.Card::available)
                     ? ContractNetwork.State.AVAILABLE : ContractNetwork.State.NO_SPACE;
         }
+        if (!dialogue && offersAreReady(player)) {
+            for (var offer : account.incidentOffers) {
+                if (offer != null && !account.incidentSlots.containsKey(offer.id())) {
+                    boolean canAccept = !offer.kind().pausesConstruction() || !IncidentWork.blocksEvents(account);
+                    cards.add(incidentCard(offer.slot(), offer.kind(), offer.level(), canAccept, null, offer.room()));
+                }
+            }
+            for (var work : account.incidents) {
+                int slot = account.incidentSlots.getOrDefault(work.id(), -100);
+                cards.add(incidentCard(slot, work.kind(), work.difficulty(), true, work.id(), work.originRoom()));
+            }
+            cards.sort(java.util.Comparator.comparingInt(card -> card.slot() < 0 ? Integer.MAX_VALUE : card.slot()));
+        }
         ContractNetwork.sendPanel(player, new ContractNetwork.Panel(foreman, dialogue, state, account.unpaid,
-                account.completed, cards, account.failed.size(), account.fines.entries().size(), feedback));
+                account.completed, cards, account.failed.size(), account.fines.entries().size(), feedback, account.lastCall,
+                account.incidents.stream().filter(work -> work.kind().pausesConstruction() && account.pausedAt >= 0)
+                        .map(work -> work.kind().title).findFirst().orElse("")));
+    }
+
+    private static ContractNetwork.Card incidentCard(int slot, IncidentState.Kind kind, ContractBalance.Difficulty level,
+                                                      boolean available, UUID id, BlockPos room) {
+        return new ContractNetwork.Card(slot, kind.title, level.ordinal() + 1, level.emeralds(), 0, -1,
+                available, false, 0, room.toShortString(), 0, 0, List.of(), id, kind == IncidentState.Kind.CLEANUP);
     }
 
     private record MaterialKey(net.minecraft.world.item.Item primary, List<net.minecraft.world.item.Item> substitutes) { }
@@ -533,12 +661,21 @@ public final class ContractEvents {
         return new ContractNetwork.Card(order.slot(), order.kind().title, order.difficulty().ordinal() + 1,
                 order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, canBuyTime,
                 check == null ? 0 : check.mismatchCount(), bonus == null ? "" : bonus.block().asItem().getDescriptionId(),
-                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials);
+                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials, null, false);
     }
 
     private static void sync(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
-        long remaining = order == null ? 0 : Math.max(0, order.deadline() - data.time(player.server));
-        ContractNetwork.sync(player, order, remaining);
+        ContractNetwork.sync(player, order, remaining(account, data.time(player.server)));
+        var names = new ArrayList<String>();
+        account.incidents.forEach(work -> names.add(work.kind().title));
+        for (int index = 0; index < account.failed.size(); index++) {
+            names.add("Снос комнаты " + (index + 1));
+        }
+        ContractNetwork.tasks(player, List.copyOf(names), account.pausedAt >= 0);
+    }
+
+    private static long remaining(ContractData.Account account, long now) {
+        return account.active == null ? 0 : Math.max(0, account.active.deadline() - (account.pausedAt >= 0 ? account.pausedAt : now));
     }
 }
