@@ -114,7 +114,7 @@ public final class ContractEvents {
         sync(player, data, account);
     }
 
-    private static String accept(ServerPlayer player, ContractData data, ContractData.Account account, int slot) {
+    static String accept(ServerPlayer player, ContractData data, ContractData.Account account, int slot) {
         if (!offersAreReady(player)) {
             return "Сейчас этот заказ недоступен.";
         }
@@ -166,7 +166,7 @@ public final class ContractEvents {
         return "Заказ принят. Чертёж ждёт на стройке.";
     }
 
-    private static String submit(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String submit(ServerPlayer player, ContractData data, ContractData.Account account) {
         if (account.active == null) {
             return "Нет активной постройки.";
         }
@@ -386,7 +386,7 @@ public final class ContractEvents {
         data.setDirty();
     }
 
-    private static String claim(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String claim(ServerPlayer player, ContractData data, ContractData.Account account) {
         int received = 0;
         while (account.unpaid > 0) {
             ItemStack payment = new ItemStack(Items.EMERALD, (int) Math.min(64, account.unpaid));

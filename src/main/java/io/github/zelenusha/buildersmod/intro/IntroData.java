@@ -67,7 +67,7 @@ public final class IntroData extends SavedData {
         }
     }
 
-    private static IntroData load(CompoundTag tag) {
+    static IntroData load(CompoundTag tag) {
         IntroData data = new IntroData();
         for (Tag entry : tag.getList("Players", Tag.TAG_COMPOUND)) {
             CompoundTag saved = (CompoundTag) entry;

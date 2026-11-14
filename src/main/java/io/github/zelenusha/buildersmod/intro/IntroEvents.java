@@ -98,7 +98,7 @@ public final class IntroEvents {
                 .then(Commands.literal("decline").executes(context -> decline(context.getSource().getPlayerOrException()))));
     }
 
-    private static void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
+    static void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             checkBuilder(player);
         }
