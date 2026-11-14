@@ -42,6 +42,10 @@ public final class ContractClient {
         Minecraft.getInstance().setScreen(new ForemanScreen(panel));
     }
 
+    public static void openDemolitions(ContractNetwork.DemolitionPanel panel) {
+        Minecraft.getInstance().setScreen(new DemolitionScreen(panel));
+    }
+
     public static void updateSite(ContractNetwork.SiteView view) {
         if (view.blueprint() == null) {
             clear();

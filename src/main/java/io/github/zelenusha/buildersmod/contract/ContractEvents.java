@@ -77,7 +77,7 @@ public final class ContractEvents {
         }
     }
 
-    static void handle(ServerPlayer player, UUID foreman, ContractNetwork.Action action, int choice) {
+    static void handle(ServerPlayer player, UUID foreman, ContractNetwork.Action action, int choice, UUID workId) {
         Entity target = player.serverLevel().getEntity(foreman);
         if (target == null || !target.isAlive() || player.distanceToSqr(target) > 64
                 || !IntroEvents.hasAcceptedWork(player) || !IntroEvents.isOwnForeman(player, target)) {
@@ -87,15 +87,20 @@ public final class ContractEvents {
         ContractData.Account account = data.account(player.getUUID());
         checkDeadline(player, data, account);
         String feedback = switch (action) {
-            case SHOW_ORDERS -> "";
+            case SHOW_ORDERS, SHOW_DEMOLITIONS -> "";
             case ACCEPT -> accept(player, data, account, choice);
             case SUBMIT -> submit(player, data, account);
             case CANCEL -> cancel(player, data, account);
             case CLAIM -> claim(player, data, account);
             case BUY_TIME -> buyTime(player, data, account);
-            case DEMOLISH, APPEAL, CARD -> "";
+            case DEMOLISH -> deliverDemolition(player, data, account, workId);
+            case APPEAL, CARD -> "";
         };
-        show(player, foreman, false, feedback);
+        if (action == ContractNetwork.Action.SHOW_DEMOLITIONS || action == ContractNetwork.Action.DEMOLISH) {
+            showDemolitions(player, foreman, account, feedback);
+        } else {
+            show(player, foreman, false, feedback);
+        }
         sync(player, data, account);
     }
 
@@ -116,7 +121,12 @@ public final class ContractEvents {
         if (selected == null) {
             return "Нет места за подходящим проёмом.";
         }
+        if (selected.kind() == ContractData.Kind.ROOM || selected.kind() == ContractData.Kind.SAMPLE) {
+            selected = selected.rebound(selected.anchor(), selected.outward(), selected.blueprint(),
+                    DemolitionWork.snapshot(site, selected.blueprint()));
+        }
         account.active = selected.started(data.time(player.server));
+        account.stairInspection = ContractData.StairInspection.WAITING;
         if (slot == -1) {
             account.special = selected;
         }
@@ -128,8 +138,16 @@ public final class ContractEvents {
         if (account.active == null) {
             return "Нет активной постройки.";
         }
+        if (account.stairInspection == ContractData.StairInspection.NEEDS_REPAIR_DAY) {
+            return "Купи сутки на восстановление лестницы перед повторной сдачей.";
+        }
         RoomBlueprint.BlueprintCheck check = check(player, account.active);
         if (check == null || !check.complete()) {
+            if (check != null && account.stairInspection == ContractData.StairInspection.READY_AT_DEADLINE) {
+                account.stairInspection = ContractData.StairInspection.NEEDS_REPAIR_DAY;
+                data.setDirty();
+                return "Лестницу повредили. Купи сутки на восстановление.";
+            }
             return "Такую комнату я не приму. Посмотри чертёж.";
         }
         finish(player, data, account, check, true);
@@ -152,7 +170,8 @@ public final class ContractEvents {
 
     private static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
-        if (order == null || order.deadline() > data.time(player.server)) {
+        if (order == null || order.deadline() > data.time(player.server)
+                || account.stairInspection != ContractData.StairInspection.WAITING) {
             return false;
         }
         RoomBlueprint.BlueprintCheck check = check(player, order);
@@ -160,7 +179,9 @@ public final class ContractEvents {
             return false;
         }
         if (check.complete() && order.kind() == ContractData.Kind.STAIRS) {
-            return false;
+            account.stairInspection = ContractData.StairInspection.READY_AT_DEADLINE;
+            data.setDirty();
+            player.sendSystemMessage(Component.literal("Лестница готова. Сдай её прорабу, чтобы открыть этаж."));
         } else if (check.complete()) {
             finish(player, data, account, check, false);
         } else if (order.slot() == -1) {
@@ -181,14 +202,40 @@ public final class ContractEvents {
     private static void fail(ContractData data, ContractData.Account account, ContractData.Accepted order, int fine, String reason) {
         account.fines.issue(fine, reason, Math.min(5, 1 + fine / 10));
         if (order.slot() >= 0) {
-            account.failed.add(order);
+            account.failed.add(new DemolitionWork(order));
             account.offers[order.slot()] = null;
         } else {
             account.special = order;
         }
         account.sequence++;
         account.active = null;
+        account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
+    }
+
+    private static String deliverDemolition(ServerPlayer player, ContractData data, ContractData.Account account, UUID workId) {
+        DemolitionWork work = account.failed.stream().filter(entry -> entry.id().equals(workId)).findFirst().orElse(null);
+        ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
+        if (work == null || site == null) {
+            return "Этот снос сейчас недоступен.";
+        }
+        if (!work.readyToDeliver(site)) {
+            return "Разбери постройку и восстанови исходные блоки пола.";
+        }
+        if (!work.deliver(player.getInventory())) {
+            return "Принеси все материалы из списка сноса.";
+        }
+        account.failed.remove(work);
+        data.setDirty();
+        return "Снос принят.";
+    }
+
+    private static void showDemolitions(ServerPlayer player, UUID foreman, ContractData.Account account, String feedback) {
+        var demolitions = account.failed.stream().map(work -> new ContractNetwork.DemolitionCard(work.id(),
+                work.order().blueprint().bounds().min(), work.materials().entrySet().stream()
+                .map(entry -> new ContractNetwork.Material(entry.getKey().getDescriptionId(), "", 0, entry.getValue()))
+                .sorted(java.util.Comparator.comparing(ContractNetwork.Material::label)).toList())).toList();
+        ContractNetwork.sendDemolitions(player, new ContractNetwork.DemolitionPanel(foreman, demolitions, feedback));
     }
 
     private static void finish(ServerPlayer player, ContractData data, ContractData.Account account,
@@ -221,6 +268,7 @@ public final class ContractEvents {
         }
         account.unpaid += account.fines.apply(wage);
         account.active = null;
+        account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
     }
 
@@ -246,7 +294,7 @@ public final class ContractEvents {
 
     private static String buyTime(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
-        if (order == null || order.extraDay() || order.deadline() <= data.time(player.server)) {
+        if (order == null || !canBuyTime(account)) {
             return "Дополнительные сутки недоступны.";
         }
         int price = order.difficulty().extraDayPrice();
@@ -266,9 +314,17 @@ public final class ContractEvents {
             }
         }
         player.getInventory().setChanged();
-        account.active = order.withExtraDay();
+        account.active = order.withExtraDay(data.time(player.server));
+        if (order.slot() < 0) {
+            account.special = account.active;
+        }
+        account.stairInspection = ContractData.StairInspection.WAITING;
         data.setDirty();
         return "Добавлены одни игровые сутки.";
+    }
+
+    private static boolean canBuyTime(ContractData.Account account) {
+        return account.stairInspection.canBuyDay(account.active.extraDay());
     }
 
     private static RoomBlueprint.BlueprintCheck check(ServerPlayer player, ContractData.Accepted order) {
@@ -310,7 +366,8 @@ public final class ContractEvents {
         ContractNetwork.State state = ContractNetwork.State.NOT_READY;
         if (!dialogue && order != null) {
             state = ContractNetwork.State.ACTIVE;
-            cards.add(card(order, check(player, order), Math.max(0, order.deadline() - data.time(player.server)), true));
+            cards.add(card(order, check(player, order), Math.max(0, order.deadline() - data.time(player.server)), true,
+                    canBuyTime(account)));
         } else if (!dialogue && offersAreReady(player)) {
             ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
             if (site != null) {
@@ -318,13 +375,13 @@ public final class ContractEvents {
                 for (ContractData.Accepted offer : account.offers) {
                     if (offer != null) {
                         cards.add(card(offer, null, offer.difficulty().duration(),
-                                OfferFactory.bind(site, account, offer) != null));
+                                OfferFactory.bind(site, account, offer) != null, false));
                     }
                 }
                 if (cards.stream().noneMatch(ContractNetwork.Card::available)) {
                     ContractData.Accepted stairs = OfferFactory.stairs(site, account);
                     if (stairs != null) {
-                        cards.add(card(stairs, null, stairs.difficulty().duration(), true));
+                        cards.add(card(stairs, null, stairs.difficulty().duration(), true, false));
                     }
                 }
             }
@@ -338,7 +395,7 @@ public final class ContractEvents {
     private record MaterialKey(net.minecraft.world.item.Item primary, List<net.minecraft.world.item.Item> substitutes) { }
 
     private static ContractNetwork.Card card(ContractData.Accepted order, RoomBlueprint.BlueprintCheck check,
-                                             long remaining, boolean available) {
+                                             long remaining, boolean available, boolean canBuyTime) {
         Map<MaterialKey, int[]> groups = new LinkedHashMap<>();
         for (var entry : order.blueprint().requirements().entrySet()) {
             BlockPos position = entry.getKey();
@@ -376,7 +433,7 @@ public final class ContractEvents {
         }).toList();
         var bonus = order.blueprint().bonus().orElse(null);
         return new ContractNetwork.Card(order.slot(), order.kind().title, order.difficulty().ordinal() + 1,
-                order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, order.extraDay(),
+                order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, canBuyTime,
                 check == null ? 0 : check.mismatchCount(), bonus == null ? "" : bonus.block().asItem().getDescriptionId(),
                 check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials);
     }

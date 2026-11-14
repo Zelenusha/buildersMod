@@ -29,11 +29,28 @@ public final class ContractData extends SavedData {
         }
     }
 
+    enum StairInspection {
+        WAITING, READY_AT_DEADLINE, NEEDS_REPAIR_DAY;
+
+        boolean canBuyDay(boolean alreadyBought) {
+            return this == NEEDS_REPAIR_DAY || (this == WAITING && !alreadyBought);
+        }
+
+        static StairInspection load(String name) {
+            for (StairInspection inspection : values()) {
+                if (inspection.name().equals(name)) {
+                    return inspection;
+                }
+            }
+            return WAITING;
+        }
+    }
+
     public record Accepted(BlockPos anchor, Direction outward, ContractBalance.Difficulty difficulty,
                            long deadline, boolean extraDay, RoomBlueprint blueprint, int wage, Kind kind, int slot,
                            int lateCount, Map<BlockPos, net.minecraft.world.level.block.state.BlockState> clearanceOriginals) {
-        public Accepted withExtraDay() {
-            return new Accepted(anchor, outward, difficulty, deadline + ContractBalance.TICKS_PER_DAY, true,
+        public Accepted withExtraDay(long now) {
+            return new Accepted(anchor, outward, difficulty, Math.max(now, deadline) + ContractBalance.TICKS_PER_DAY, true,
                     blueprint, wage, kind, slot, lateCount, clearanceOriginals);
         }
 
@@ -55,6 +72,7 @@ public final class ContractData extends SavedData {
 
     public static final class Account {
         Accepted active;
+        StairInspection stairInspection = StairInspection.WAITING;
         int completed;
         long unpaid;
         FineLedger fines = new FineLedger();
@@ -63,7 +81,7 @@ public final class ContractData extends SavedData {
         Accepted special;
         final Accepted[] offers = new Accepted[5];
         final List<Accepted> rooms = new ArrayList<>();
-        final List<Accepted> failed = new ArrayList<>();
+        final List<DemolitionWork> failed = new ArrayList<>();
     }
 
     private final Map<UUID, Account> accounts = new HashMap<>();
@@ -108,12 +126,22 @@ public final class ContractData extends SavedData {
                 account.fines.issue(legacyFine, "Недострой", 1);
             }
             account.active = loadContract(player.getCompound("Active"));
+            if (account.active != null && account.active.kind() == Kind.STAIRS) {
+                account.stairInspection = StairInspection.load(player.getString("StairInspection"));
+            }
             account.special = loadContract(player.getCompound("Special"));
             for (int slot = 0; slot < account.offers.length; slot++) {
                 account.offers[slot] = loadContract(player.getCompound("Offer" + slot));
             }
             loadContracts(account.rooms, player.getList("Rooms", Tag.TAG_COMPOUND));
-            loadContracts(account.failed, player.getList("Failed", Tag.TAG_COMPOUND));
+            ListTag failures = player.getList("Failed", Tag.TAG_COMPOUND);
+            for (int failureIndex = 0; failureIndex < failures.size(); failureIndex++) {
+                CompoundTag failure = failures.getCompound(failureIndex);
+                Accepted order = loadContract(failure);
+                if (order != null) {
+                    account.failed.add(DemolitionWork.load(order, failure.getCompound("Demolition")));
+                }
+            }
         }
         return data;
     }
@@ -224,6 +252,7 @@ public final class ContractData extends SavedData {
             player.put("Fines", saveFines(account.fines));
             if (account.active != null) {
                 player.put("Active", saveContract(account.active));
+                player.putString("StairInspection", account.stairInspection.name());
             }
             if (account.special != null) {
                 player.put("Special", saveContract(account.special));
@@ -234,7 +263,13 @@ public final class ContractData extends SavedData {
                 }
             }
             player.put("Rooms", saveContracts(account.rooms));
-            player.put("Failed", saveContracts(account.failed));
+            ListTag failures = new ListTag();
+            account.failed.forEach(work -> {
+                CompoundTag failure = saveContract(work.order());
+                failure.put("Demolition", work.save());
+                failures.add(failure);
+            });
+            player.put("Failed", failures);
             players.add(player);
         });
         root.putInt("Version", 2);

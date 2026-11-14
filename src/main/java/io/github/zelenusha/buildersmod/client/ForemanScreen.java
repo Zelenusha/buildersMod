@@ -26,6 +26,9 @@ final class ForemanScreen extends Screen {
         int y = (height - HEIGHT) / 2;
         if (panel.dialogue()) {
             action("Открыть заказы", ContractNetwork.Action.SHOW_ORDERS, 0, x, y + 153, WIDTH - 24);
+            Button demolitions = action("Сносы — " + panel.failed(), ContractNetwork.Action.SHOW_DEMOLITIONS, 0,
+                    x, y + 176, WIDTH - 24);
+            demolitions.active = panel.failed() > 0;
             return;
         }
 
@@ -50,14 +53,17 @@ final class ForemanScreen extends Screen {
             int price = ContractBalance.Difficulty.values()[card.level() - 1].extraDayPrice();
             Button extra = action("Доп. сутки — " + price + " изумр.", ContractNetwork.Action.BUY_TIME, 0,
                     x + 135, y + 150, WIDTH - 159);
-            extra.active = !card.extraDay() && card.remaining() > 0;
+            extra.active = card.canBuyTime();
         } else if (card != null) {
             Button accept = action("Принять заказ", ContractNetwork.Action.ACCEPT, card.slot(), x, y + 150, WIDTH - 24);
             accept.active = card.available();
         }
         Button claim = action("Забрать зарплату: " + panel.unpaid(), ContractNetwork.Action.CLAIM, 0,
-                x, y + 176, WIDTH - 24);
+                x, y + 176, 176);
         claim.active = panel.unpaid() > 0;
+        Button demolitions = action("Сносы — " + panel.failed(), ContractNetwork.Action.SHOW_DEMOLITIONS, 0,
+                x + 181, y + 176, WIDTH - 205);
+        demolitions.active = panel.failed() > 0;
     }
 
     private ContractNetwork.Card selectedCard() {

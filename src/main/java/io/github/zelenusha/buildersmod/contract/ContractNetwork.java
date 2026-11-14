@@ -4,6 +4,7 @@ import io.github.zelenusha.buildersmod.BuildersMod;
 import io.github.zelenusha.buildersmod.client.ContractClient;
 import java.util.UUID;
 import java.util.List;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
@@ -16,7 +17,7 @@ import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class ContractNetwork {
-    public enum Action { SHOW_ORDERS, ACCEPT, SUBMIT, CANCEL, CLAIM, BUY_TIME, DEMOLISH, APPEAL, CARD }
+    public enum Action { SHOW_ORDERS, ACCEPT, SUBMIT, CANCEL, CLAIM, BUY_TIME, SHOW_DEMOLITIONS, DEMOLISH, APPEAL, CARD }
     public enum State { NOT_READY, AVAILABLE, ACTIVE, NO_SPACE }
 
     public record Material(String label, String substitutes, int placed, int needed) {
@@ -30,13 +31,13 @@ public final class ContractNetwork {
     }
 
     public record Card(int slot, String title, int level, int wage, int bonus, long remaining, boolean available,
-                       boolean extraDay, int missing, String bonusLabel, int bonusFound, int bonusTarget,
+                       boolean canBuyTime, int missing, String bonusLabel, int bonusFound, int bonusTarget,
                        List<Material> materials) {
         void write(FriendlyByteBuf buffer) {
             buffer.writeVarInt(slot).writeUtf(title, 128).writeVarInt(level).writeVarInt(wage).writeVarInt(bonus)
                     .writeVarLong(remaining);
             buffer.writeBoolean(available);
-            buffer.writeBoolean(extraDay);
+            buffer.writeBoolean(canBuyTime);
             buffer.writeVarInt(missing).writeUtf(bonusLabel, 128).writeVarInt(bonusFound).writeVarInt(bonusTarget);
             buffer.writeCollection(materials, (buf, material) -> material.write(buf));
         }
@@ -88,17 +89,40 @@ public final class ContractNetwork {
         }
     }
 
-    private record Request(UUID foreman, Action action, int choice) {
-        static void write(Request value, FriendlyByteBuf buffer) {
-            buffer.writeUUID(value.foreman).writeEnum(value.action).writeVarInt(value.choice);
+    public record DemolitionCard(UUID id, BlockPos position, List<Material> materials) {
+        void write(FriendlyByteBuf buffer) {
+            buffer.writeUUID(id).writeBlockPos(position).writeCollection(materials, (buf, entry) -> entry.write(buf));
         }
 
-        static Request read(FriendlyByteBuf buffer) {
-            return new Request(buffer.readUUID(), buffer.readEnum(Action.class), buffer.readVarInt());
+        static DemolitionCard read(FriendlyByteBuf buffer) {
+            return new DemolitionCard(buffer.readUUID(), buffer.readBlockPos(), buffer.readList(Material::read));
         }
     }
 
-    private static final String PROTOCOL = "2";
+    public record DemolitionPanel(UUID foreman, List<DemolitionCard> cards, String feedback) {
+        static void write(DemolitionPanel value, FriendlyByteBuf buffer) {
+            buffer.writeUUID(value.foreman).writeCollection(value.cards, (buf, entry) -> entry.write(buf));
+            buffer.writeUtf(value.feedback, 256);
+        }
+
+        static DemolitionPanel read(FriendlyByteBuf buffer) {
+            return new DemolitionPanel(buffer.readUUID(), buffer.readList(DemolitionCard::read), buffer.readUtf(256));
+        }
+    }
+
+    private record Request(UUID foreman, Action action, int choice, UUID workId) {
+        static void write(Request value, FriendlyByteBuf buffer) {
+            buffer.writeUUID(value.foreman).writeEnum(value.action).writeVarInt(value.choice);
+            buffer.writeNullable(value.workId, FriendlyByteBuf::writeUUID);
+        }
+
+        static Request read(FriendlyByteBuf buffer) {
+            return new Request(buffer.readUUID(), buffer.readEnum(Action.class), buffer.readVarInt(),
+                    buffer.readNullable(FriendlyByteBuf::readUUID));
+        }
+    }
+
+    private static final String PROTOCOL = "3";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "contracts"), () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals);
 
@@ -110,7 +134,7 @@ public final class ContractNetwork {
                 .consumerMainThread((request, context) -> {
                     ServerPlayer player = context.get().getSender();
                     if (player != null) {
-                        ContractEvents.handle(player, request.foreman, request.action, request.choice);
+                        ContractEvents.handle(player, request.foreman, request.action, request.choice, request.workId);
                     }
                 }).add();
         CHANNEL.messageBuilder(Panel.class, 1, NetworkDirection.PLAY_TO_CLIENT)
@@ -125,9 +149,17 @@ public final class ContractNetwork {
                 .encoder(TimerView::write).decoder(TimerView::read)
                 .consumerMainThread((view, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
                         () -> () -> ContractClient.updateTimer(view.active, view.remaining))).add();
+        CHANNEL.messageBuilder(DemolitionPanel.class, 4, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(DemolitionPanel::write).decoder(DemolitionPanel::read)
+                .consumerMainThread((panel, context) -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
+                        () -> () -> ContractClient.openDemolitions(panel))).add();
     }
 
     static void sendPanel(ServerPlayer player, Panel panel) {
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), panel);
+    }
+
+    static void sendDemolitions(ServerPlayer player, DemolitionPanel panel) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), panel);
     }
 
@@ -152,6 +184,10 @@ public final class ContractNetwork {
     }
 
     public static void request(UUID foreman, Action action, int choice) {
-        CHANNEL.sendToServer(new Request(foreman, action, choice));
+        CHANNEL.sendToServer(new Request(foreman, action, choice, null));
+    }
+
+    public static void deliverDemolition(UUID foreman, UUID workId) {
+        CHANNEL.sendToServer(new Request(foreman, Action.DEMOLISH, 0, workId));
     }
 }

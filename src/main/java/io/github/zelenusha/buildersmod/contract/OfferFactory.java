@@ -151,7 +151,7 @@ final class OfferFactory {
         List<RoomBlueprint.Bounds> occupied = new ArrayList<>();
         account.rooms.stream().filter(order -> order.kind() != ContractData.Kind.STAIRS)
                 .map(order -> order.blueprint().bounds()).forEach(occupied::add);
-        account.failed.stream().map(order -> order.blueprint().bounds()).forEach(occupied::add);
+        account.failed.stream().map(work -> work.order().blueprint().bounds()).forEach(occupied::add);
         if (account.active != null && account.active.kind() != ContractData.Kind.STAIRS) {
             occupied.add(account.active.blueprint().bounds());
         }
