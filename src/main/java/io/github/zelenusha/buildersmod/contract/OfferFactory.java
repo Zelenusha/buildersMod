@@ -14,13 +14,20 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
@@ -28,6 +35,13 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 
 final class OfferFactory {
+    private static final Set<ResourceKey<Biome>> SAND_BIOMES = Set.of(Biomes.DESERT, Biomes.BEACH, Biomes.SNOWY_BEACH,
+            Biomes.RIVER, Biomes.FROZEN_RIVER, Biomes.WARM_OCEAN, Biomes.LUKEWARM_OCEAN, Biomes.DEEP_LUKEWARM_OCEAN);
+    private static final Set<ResourceKey<Biome>> MONUMENT_BIOMES = Set.of(Biomes.DEEP_OCEAN, Biomes.DEEP_COLD_OCEAN,
+            Biomes.DEEP_FROZEN_OCEAN, Biomes.DEEP_LUKEWARM_OCEAN);
+    private static final Set<Block> GLAZING = Set.of(Blocks.GLASS, Blocks.GLASS_PANE, Blocks.WHITE_STAINED_GLASS,
+            Blocks.WHITE_STAINED_GLASS_PANE, Blocks.BLUE_STAINED_GLASS, Blocks.BLUE_STAINED_GLASS_PANE);
+
     private OfferFactory() { }
 
     static void fill(ServerPlayer player, ContractData data, ContractData.Account account) {
@@ -37,6 +51,7 @@ final class OfferFactory {
         }
         List<SiteDoor> doors = doors(account);
         List<RoomBlueprint.Bounds> occupied = occupied(account);
+        var localMaterials = com.google.common.base.Suppliers.memoize(() -> availableMaterials(player));
         for (int slot = 0; slot < account.offers.length; slot++) {
             if (account.offers[slot] != null || slot >= 3 && account.incidentOffers[slot - 3] != null) {
                 continue;
@@ -51,7 +66,7 @@ final class OfferFactory {
             }
             ContractData.Accepted offer = slot == 0 && account.sequence == 0 ? sample(slot) : null;
             if (offer == null) {
-                offer = generate(player, site, account, slot, doors, occupied);
+                offer = generate(player, site, account, slot, doors, occupied, localMaterials);
             }
             if (offer != null) {
                 account.offers[slot] = offer;
@@ -67,7 +82,8 @@ final class OfferFactory {
     }
 
     private static ContractData.Accepted generate(ServerPlayer player, ServerLevel site, ContractData.Account account, int slot,
-                                                  List<SiteDoor> doors, List<RoomBlueprint.Bounds> occupied) {
+                                                  List<SiteDoor> doors, List<RoomBlueprint.Bounds> occupied,
+                                                  Supplier<Predicate<Block>> localMaterials) {
         if (doors.isEmpty()) {
             return null;
         }
@@ -75,7 +91,7 @@ final class OfferFactory {
         RandomSource random = RandomSource.create(site.getSeed() ^ owner.getLeastSignificantBits()
                 ^ (long) account.sequence * 4_294_967_311L ^ slot * 71_531L);
         ContractBalance.Difficulty level = ContractBalance.selectDifficulty(random, account.completed);
-        Predicate<Block> available = availableMaterials(player, level);
+        Predicate<Block> available = level.ordinal() > 1 ? block -> MaterialRarity.tier(block) > 0 : localMaterials.get();
         for (SiteDoor door : doors) {
             if (!hasDoor(site, door)) {
                 continue;
@@ -90,19 +106,31 @@ final class OfferFactory {
         return null;
     }
 
-    private static Predicate<Block> availableMaterials(ServerPlayer player, ContractBalance.Difficulty level) {
-        if (level.ordinal() > 1) {
-            return block -> MaterialRarity.tier(block) > 0;
+    private static Predicate<Block> availableMaterials(ServerPlayer player) {
+        var sources = new java.util.HashSet<>(SAND_BIOMES);
+        sources.addAll(MONUMENT_BIOMES);
+        sources.add(Biomes.CHERRY_GROVE);
+        Set<ResourceKey<Biome>> nearby = IntroEvents.nearbyBiomes(player, sources);
+        Map<Item, Boolean> stocks = new HashMap<>();
+        return material -> availableLocally(material, nearby, item -> stocks.computeIfAbsent(item,
+                product -> IntroEvents.availableSupply(player, product) > 0));
+    }
+
+    static boolean availableLocally(Block block, Set<ResourceKey<Biome>> nearby, Predicate<Item> stocked) {
+        if (MaterialRarity.tier(block) == 0) {
+            return false;
         }
-        Map<Block, Boolean> evaluated = new HashMap<>();
-        return block -> evaluated.computeIfAbsent(block, material -> {
-            if (material == Blocks.CHERRY_PLANKS) {
-                return IntroEvents.nearbyBiome(player, net.minecraft.world.level.biome.Biomes.CHERRY_GROVE)
-                        || IntroEvents.availableSupply(player, net.minecraft.world.item.Items.CHERRY_LOG) > 0
-                        || IntroEvents.availableSupply(player, material.asItem()) > 0;
-            }
-            return MaterialRarity.tier(material) > 0;
-        });
+        if (block == Blocks.CHERRY_PLANKS) {
+            return nearby.contains(Biomes.CHERRY_GROVE) || stocked.test(Items.CHERRY_LOG) || stocked.test(Items.CHERRY_PLANKS);
+        }
+        if (block == Blocks.SANDSTONE || GLAZING.contains(block)) {
+            return SAND_BIOMES.stream().anyMatch(nearby::contains) || stocked.test(Items.SAND) || stocked.test(block.asItem());
+        }
+        if (block == Blocks.PRISMARINE) {
+            return MONUMENT_BIOMES.stream().anyMatch(nearby::contains)
+                    || stocked.test(Items.PRISMARINE_SHARD) || stocked.test(Items.PRISMARINE);
+        }
+        return true;
     }
 
     static ContractData.Accepted bind(ServerLevel site, ContractData.Account account, ContractData.Accepted offer) {

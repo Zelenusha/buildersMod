@@ -1,7 +1,6 @@
 package io.github.zelenusha.buildersmod.intro;
 
 import io.github.zelenusha.buildersmod.contract.IncidentWork;
-
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.Commands;
@@ -10,6 +9,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -22,6 +22,7 @@ import net.minecraft.world.entity.npc.WanderingTrader;
 import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
@@ -33,6 +34,7 @@ import net.minecraftforge.event.level.BlockEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.IEventBus;
 
+import java.util.Set;
 import java.util.UUID;
 
 public final class IntroEvents {
@@ -64,9 +66,9 @@ public final class IntroEvents {
         return IntroData.get(player.server).firstOffersDay(player.getUUID());
     }
 
-    public static boolean nearbyBiome(ServerPlayer player, net.minecraft.resources.ResourceKey<net.minecraft.world.level.biome.Biome> biome) {
+    public static Set<ResourceKey<Biome>> nearbyBiomes(ServerPlayer player, Set<ResourceKey<Biome>> biomes) {
         BlockPos dugout = IntroData.get(player.server).work(player.getUUID()).dugout;
-        return dugout != null && IntroTrades.nearbySourceBiomes(player.server.overworld(), dugout).contains(biome);
+        return dugout == null ? Set.of() : IntroTrades.nearbyBiomes(player.server.overworld(), dugout, biomes);
     }
 
     public static boolean isForeman(Entity entity) {

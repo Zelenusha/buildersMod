@@ -92,9 +92,13 @@ final class IntroTrades {
     }
 
     static Set<ResourceKey<Biome>> nearbySourceBiomes(ServerLevel level, BlockPos dugout) {
-        Set<ResourceKey<Biome>> nearby = new HashSet<>();
         Set<ResourceKey<Biome>> relevant = new HashSet<>();
         MATERIALS.forEach(stock -> relevant.addAll(stock.biomes()));
+        return nearbyBiomes(level, dugout, relevant);
+    }
+
+    static Set<ResourceKey<Biome>> nearbyBiomes(ServerLevel level, BlockPos dugout, Set<ResourceKey<Biome>> relevant) {
+        Set<ResourceKey<Biome>> nearby = new HashSet<>();
         int radiusSquared = LOCAL_RADIUS * LOCAL_RADIUS;
         int centerX = dugout.getX() + 2;
         int centerZ = dugout.getZ() + 2;

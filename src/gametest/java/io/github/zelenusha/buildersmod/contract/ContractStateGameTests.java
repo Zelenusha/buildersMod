@@ -14,12 +14,31 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.biome.Biomes;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 
 @GameTestHolder("buildersmod")
 @PrefixGameTestTemplate(false)
 public final class ContractStateGameTests {
+    @GameTest(template = "empty")
+    public static void restrictedMaterialsNeedALocalSourceOrAStockedIngredient(GameTestHelper helper) {
+        helper.assertTrue(!OfferFactory.availableLocally(Blocks.CHERRY_PLANKS, Set.of(), item -> false),
+                "A distant wood with no trade must be rejected");
+        helper.assertTrue(OfferFactory.availableLocally(Blocks.CHERRY_PLANKS, Set.of(Biomes.CHERRY_GROVE), item -> false),
+                "Local cherry logs allow crafting cherry planks");
+        helper.assertTrue(OfferFactory.availableLocally(Blocks.CHERRY_PLANKS, Set.of(), item -> item == Items.CHERRY_LOG),
+                "A stocked log also allows crafting planks");
+        helper.assertTrue(!OfferFactory.availableLocally(Blocks.BLUE_STAINED_GLASS_PANE, Set.of(Biomes.FOREST), item -> false),
+                "Glass needs sand or a matching trade");
+        helper.assertTrue(OfferFactory.availableLocally(Blocks.BLUE_STAINED_GLASS_PANE, Set.of(), item -> item == Items.SAND),
+                "Stocked sand makes glazing available through its recipe");
+        helper.assertTrue(!OfferFactory.availableLocally(Blocks.BEDROCK, Set.of(), item -> true),
+                "A trade source does not override the survival catalogue");
+        helper.succeed();
+    }
+
     @GameTest(template = "empty")
     public static void preservesTheReservedCourtyardUntilTheRoomIsAccepted(GameTestHelper helper) {
         var site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
