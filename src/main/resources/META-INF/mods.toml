@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[47,48)"
+license="All Rights Reserved"
+issueTrackerURL="https://github.com/Zelenusha/buildersMod/issues"
+
+[[mods]]
+modId="buildersmod"
+version="${mod_version}"
+displayName="Мегастройка"
+description="Строительная контора и заказы на комнаты по чертежам."
+
+[[dependencies.buildersmod]]
+modId="forge"
+mandatory=true
+versionRange="[${forge_version},48)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.buildersmod]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.20.2)"
+ordering="NONE"
+side="BOTH"

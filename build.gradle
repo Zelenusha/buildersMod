@@ -1,0 +1,66 @@
+plugins {
+    id 'java'
+    id 'net.minecraftforge.gradle' version '6.0.54'
+}
+
+group = 'io.github.zelenusha.buildersmod'
+version = mod_version
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            mods {
+                buildersmod { source sourceSets.main }
+            }
+        }
+        client { }
+        gameTestServer {
+            workingDirectory project.file('run-tests')
+            property 'forge.enabledGameTestNamespaces', mod_id
+            mods {
+                buildersmod { source sourceSets.gametest }
+            }
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def properties = [mod_version: mod_version, forge_version: forge_version]
+    inputs.properties properties
+    filesMatching('META-INF/mods.toml') {
+        expand properties
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jar.finalizedBy('reobfJar')

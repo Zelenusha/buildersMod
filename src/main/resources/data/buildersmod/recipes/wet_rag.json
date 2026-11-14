@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "PPP",
+    "PWP",
+    "PPP"
+  ],
+  "key": {
+    "P": { "item": "minecraft:paper" },
+    "W": {
+      "type": "forge:nbt",
+      "item": "minecraft:potion",
+      "nbt": { "Potion": "minecraft:water" }
+    }
+  },
+  "result": { "item": "buildersmod:wet_rag" }
+}

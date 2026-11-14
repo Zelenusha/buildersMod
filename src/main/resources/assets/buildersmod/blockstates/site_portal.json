@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "axis=x": {"model": "buildersmod:block/site_portal"},
+    "axis=z": {"model": "buildersmod:block/site_portal", "y": 90}
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "type": "buildersmod:construction_site",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "buildersmod:construction_site",
+      "features": true,
+      "lakes": false,
+      "structure_overrides": [],
+      "layers": [
+        {"height": 64, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"},
+        {"height": 24, "block": "minecraft:air"},
+        {"height": 1, "block": "minecraft:stone"}
+      ]
+    }
+  }
+}
