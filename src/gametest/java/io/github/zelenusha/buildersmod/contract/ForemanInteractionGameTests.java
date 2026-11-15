@@ -2,17 +2,22 @@ package io.github.zelenusha.buildersmod.contract;
 
 import com.mojang.authlib.GameProfile;
 import io.github.zelenusha.buildersmod.BuildersMod;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.intro.IntroData;
 import io.github.zelenusha.buildersmod.intro.IntroFixtures;
+import io.github.zelenusha.buildersmod.maintenance.IncidentState;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
@@ -108,6 +113,102 @@ public final class ForemanInteractionGameTests {
                 other.discard();
             }
             overworld.removePlayerImmediately(player, Entity.RemovalReason.DISCARDED);
+            channel.finishAndReleaseAll();
+            storage.set("buildersmod_intro", previousIntro);
+            storage.set("buildersmod_contracts", previousContracts);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void automaticFloodCallsOnceAndPausesTheOrderThroughReload(GameTestHelper helper) {
+        var server = helper.getLevel().getServer();
+        var site = server.getLevel(ConstructionSite.SITE_LEVEL);
+        var storage = server.overworld().getDataStorage();
+        var previousIntro = IntroData.get(server);
+        var previousContracts = ContractData.get(server);
+        var contracts = new ContractData();
+        var player = new ServerPlayer(server, site, new GameProfile(UUID.randomUUID(), "scheduled-call"));
+        var connection = new Connection(PacketFlow.SERVERBOUND);
+        var channel = new EmbeddedChannel(connection);
+        connection.setProtocol(ConnectionProtocol.PLAY);
+        new ServerGamePacketListenerImpl(server, connection, player);
+        var source = new BlockPos(512, ConstructionSite.START_FLOOR_Y + 12, 520);
+        var ceiling = source.above(2);
+        var bounds = new RoomBlueprint.Bounds(source, ceiling);
+        storage.set("buildersmod_intro", new IntroData());
+        storage.set("buildersmod_contracts", contracts);
+        try {
+            long day = Math.floorDiv(server.overworld().getDayTime(), ContractBalance.TICKS_PER_DAY);
+            IntroFixtures.setEmployment(player, helper.absolutePos(BlockPos.ZERO), day);
+            ContractEvents.withLoadedArea(site, bounds, () -> {
+                var before = site.getBlockState(source);
+                var beforeCeiling = site.getBlockState(ceiling);
+                player.moveTo(source.getX() + 3.5, source.getY(), source.getZ() + 0.5, 0, 0);
+                site.addNewPlayer(player);
+                Villager own = foreman(site, source.east(4), player.getUUID());
+                try {
+                    site.setBlock(source, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+                    site.setBlock(ceiling, Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+                    var account = contracts.account(player.getUUID());
+                    // A single dry, unsupported interior position with no wall is only eligible for flooding.
+                    var room = RoomBlueprint.of(bounds, List.of(new RoomBlueprint.Bounds(source, source)),
+                            Map.of(ceiling, new RoomBlueprint.Requirement(Blocks.STONE.defaultBlockState(), RoomBlueprint.Criterion.CEILING)),
+                            List.of(new RoomBlueprint.Door(source, Direction.WEST)), Optional.empty());
+                    account.rooms.add(new ContractData.Accepted(source, Direction.WEST, ContractBalance.Difficulty.ONE,
+                            0, false, room, 5, ContractData.Kind.ROOM, 0, 0, Map.of()));
+                    var door = ConstructionSite.STARTER_DOORS.get(0);
+                    long start = contracts.time(server);
+                    long deadline = start + ContractBalance.Difficulty.ONE.duration();
+                    account.active = new ContractData.Accepted(door.lower(), door.outward(), ContractBalance.Difficulty.ONE,
+                            deadline, false, SampleRoomBlueprint.at(door.lower(), door.outward()), 5,
+                            ContractData.Kind.SAMPLE, 0, 0, Map.of());
+                    for (int slot = 0; slot < account.offers.length; slot++) {
+                        account.offers[slot] = new ContractData.Accepted(door.lower(), door.outward(), ContractBalance.Difficulty.ONE,
+                                0, false, account.active.blueprint(), 5, ContractData.Kind.SAMPLE, slot, 0, Map.of());
+                    }
+                    account.pendingIncidentSeed = 1873L;
+                    long boundary = start - Math.floorMod(start, 20);
+                    IncidentWork.tick(player, contracts, account, boundary);
+                    String call = readReply(channel, 7, buffer -> buffer.readUtf(512));
+                    helper.assertTrue(account.incidents.size() == 1 && account.pendingIncidentSeed == null
+                                    && Blocks.WATER == site.getBlockState(source).getBlock(), "The pending weekly incident places water once");
+                    var incident = account.incidents.get(0);
+                    helper.assertTrue(incident.automatic() && incident.kind() == IncidentState.Kind.FLOOD && account.pausedAt == start
+                                    && call != null && call.contains("сантехник") && call.equals(account.lastCall),
+                            "Automatic flooding pauses the order and sends the matching foreman call over Forge");
+
+                    var restored = ContractData.load(contracts.save(new CompoundTag()));
+                    storage.set("buildersmod_contracts", restored);
+                    var loaded = restored.account(player.getUUID());
+                    loaded.pendingIncidentSeed = 172L;
+                    IncidentWork.tick(player, restored, loaded, boundary + 20);
+                    helper.assertTrue(loaded.incidents.size() == 1 && loaded.pendingIncidentSeed == null
+                                    && readReply(channel, 7, buffer -> buffer.readUtf(512)) == null,
+                            "An overlapping scheduled incident does not queue work or send another call");
+
+                    restored.advanceSleep(2 * ContractBalance.TICKS_PER_DAY);
+                    sendRequest(channel, own.getUUID(), ContractNetwork.Action.SHOW_ORDERS, 0);
+                    var paused = readPanel(channel);
+                    helper.assertTrue(paused != null && call.equals(paused.lastCall()) && paused.pauseReason().equals(incident.kind().title)
+                                    && paused.cards().get(0).remaining() == deadline - start
+                                    && paused.cards().stream().anyMatch(card -> incident.id().equals(card.incidentId())),
+                            "The order menu retains the call and the frozen duration after reload and sleeping");
+                    site.setBlock(source, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+                    sendRequest(channel, own.getUUID(), ContractNetwork.Action.SUBMIT, 0, incident.id());
+                    var resumed = readPanel(channel);
+                    helper.assertTrue(resumed != null && resumed.pauseReason().isEmpty() && call.equals(resumed.lastCall())
+                                    && resumed.cards().get(0).remaining() == deadline - start && loaded.incidents.isEmpty(),
+                            "Submitting the automatic flood resumes the original timer and keeps the call in the menu");
+                } finally {
+                    own.discard();
+                    site.removePlayerImmediately(player, Entity.RemovalReason.DISCARDED);
+                    site.setBlock(source, before, Block.UPDATE_CLIENTS);
+                    site.setBlock(ceiling, beforeCeiling, Block.UPDATE_CLIENTS);
+                }
+                return null;
+            });
+        } finally {
             channel.finishAndReleaseAll();
             storage.set("buildersmod_intro", previousIntro);
             storage.set("buildersmod_contracts", previousContracts);

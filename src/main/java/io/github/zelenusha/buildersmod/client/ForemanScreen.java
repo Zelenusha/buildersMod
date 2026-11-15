@@ -15,6 +15,7 @@ final class ForemanScreen extends Screen {
     private int selected;
     private int detailOffset;
     private Detail detail = Detail.MATERIALS;
+    private boolean lastCallOpen;
 
     private enum Detail { CONDITIONS, MATERIALS, BONUS }
 
@@ -34,6 +35,16 @@ final class ForemanScreen extends Screen {
             demolitions.active = panel.failed() > 0;
             action("Штрафы — " + panel.fineCount(), ContractNetwork.Action.SHOW_FINES, 0,
                     x + 151, y + 176, 141).active = panel.fineCount() > 0;
+            return;
+        }
+        if (!panel.lastCall().isEmpty()) {
+            String caption = lastCallOpen ? "К заказам" : "Звонок";
+            addRenderableWidget(Button.builder(Component.literal(caption), button -> {
+                lastCallOpen = !lastCallOpen;
+                rebuildWidgets();
+            }).bounds(x + 221, y + 6, 71, 18).build());
+        }
+        if (lastCallOpen) {
             return;
         }
 
@@ -137,6 +148,9 @@ final class ForemanScreen extends Screen {
                 graphics.drawWordWrap(font, Component.literal("Последний звонок · " + panel.lastCall()),
                         x + 12, y + 79, WIDTH - 24, 0x8BCCF3);
             }
+        } else if (lastCallOpen) {
+            graphics.drawString(font, "Последний звонок прораба", x + 12, y + 44, 0x8BCCF3, false);
+            graphics.drawWordWrap(font, Component.literal(panel.lastCall()), x + 12, y + 63, WIDTH - 24, 0xE4E9ED);
         } else {
             renderOrder(graphics, mouseX, mouseY, x + 12, y + 55);
         }
@@ -166,7 +180,9 @@ final class ForemanScreen extends Screen {
             graphics.drawString(font, "Причина паузы · " + panel.pauseReason(), x, y + 22, 0xF3D88C, false);
         } else if (card.remaining() < 0) {
             graphics.drawString(font, "Комната на стройке · " + card.bonusLabel(), x, y + 22, 0xE4E9ED, false);
-            if (card.canParallel() && card.incidentId() == null) {
+            if (!card.available()) {
+                graphics.drawString(font, card.unavailableReason(), x, y + 33, 0xF3D88C, false);
+            } else if (card.canParallel() && card.incidentId() == null) {
                 graphics.drawString(font, "Можно принять дополнительно", x, y + 33, 0x91DE92, false);
             }
         } else if (!card.available()) {
@@ -216,7 +232,7 @@ final class ForemanScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         ContractNetwork.Card card = selectedCard();
-        if (card != null && card.remaining() >= 0 && detail != Detail.BONUS) {
+        if (!lastCallOpen && card != null && card.remaining() >= 0 && detail != Detail.BONUS) {
             int rows = detail == Detail.MATERIALS ? card.materials().size() : card.conditions().size();
             int maximum = Math.max(0, rows - 4);
             detailOffset = Math.max(0, Math.min(maximum, detailOffset - (int) Math.signum(delta)));

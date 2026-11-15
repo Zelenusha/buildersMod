@@ -209,6 +209,11 @@ public final class ContractClient {
                     return;
                 }
                 var font = game.font;
+                boolean showCall = callTicks > 0 && game.screen == null;
+                boolean stackCall = showCall && width < 240;
+                int callTextWidth = stackCall ? Math.max(1, width - 47) : Math.min(width / 2 - 36, 200);
+                int callLeft = width - callTextWidth - 32;
+                int labelWidth = Math.max(1, (showCall && !stackCall ? callLeft - 5 : width - 5) - 12);
                 int y = 5;
                 var labels = new ArrayList<String>();
                 if (blueprint != null) {
@@ -216,21 +221,26 @@ public final class ContractClient {
                 }
                 labels.addAll(tasks);
                 for (String text : labels) {
-                    graphics.fill(5, y, 12 + font.width(text), y + 15, 0xA0232A33);
-                    graphics.drawString(font, text, 8, y + 4, 0xFFFFFF, false);
-                    y += 16;
-                }
-                if (callTicks > 0 && game.screen == null) {
-                    int textWidth = Math.min(width / 2 - 36, 200);
-                    if (textWidth > 30) {
-                        int x = width - textWidth - 32;
-                        var message = Component.literal(call);
-                        int bottom = 30 + font.wordWrapHeight(call, textWidth);
-                        graphics.fill(x, 5, width - 5, bottom, 0xD0232A33);
-                        graphics.blit(FOREMAN_HEAD, x + 5, 11, 16, 20, 8.0F, 8.0F, 8, 10, 64, 64);
-                        graphics.drawString(font, "Прораб", x + 25, 10, 0x8BCCF3, false);
-                        graphics.drawWordWrap(font, message, x + 25, 22, textWidth, 0xFFFFFF);
+                    var lines = font.split(Component.literal(text), labelWidth);
+                    int boxWidth = lines.stream().mapToInt(font::width).max().orElse(0);
+                    int bottom = y + lines.size() * font.lineHeight + 6;
+                    graphics.fill(5, y, 12 + boxWidth, bottom, 0xA0232A33);
+                    int textY = y + 4;
+                    for (var line : lines) {
+                        graphics.drawString(font, line, 8, textY, 0xFFFFFF, false);
+                        textY += font.lineHeight;
                     }
+                    y = bottom + 1;
+                }
+                if (showCall) {
+                    int top = stackCall ? y + 3 : 5;
+                    var message = Component.literal(call);
+                    int bottom = top + Math.max(32, 23 + font.wordWrapHeight(message, callTextWidth));
+                    graphics.fill(callLeft, top, width - 5, bottom, 0xD0232A33);
+                    graphics.blit(FOREMAN_HEAD, callLeft + 5, top + 6, 16, 20, 8.0F, 8.0F, 8, 10, 64, 64);
+                    graphics.blit(FOREMAN_HEAD, callLeft + 11, top + 20, 4, 8, 26.0F, 2.0F, 2, 4, 64, 64);
+                    graphics.drawString(font, "Прораб", callLeft + 25, top + 5, 0x8BCCF3, false);
+                    graphics.drawWordWrap(font, message, callLeft + 25, top + 17, callTextWidth, 0xFFFFFF);
                 }
             });
         }

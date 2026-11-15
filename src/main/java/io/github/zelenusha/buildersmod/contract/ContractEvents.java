@@ -595,23 +595,35 @@ public final class ContractEvents {
             ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
             if (site != null) {
                 OfferFactory.fill(player, data, account);
+                boolean constructionPaused = account.incidents.stream().anyMatch(work -> work.kind().pausesConstruction());
+                boolean anyRoomFits = false;
+                String blockedReason = "Сначала сдай происшествие на стройке";
                 for (ContractData.Accepted offer : account.offers) {
                     if (offer != null && (offer.slot() < 3 || account.incidentOffers[offer.slot() - 3] == null)) {
                         boolean fits = OfferFactory.bind(site, account, offer) != null;
-                        String reason = account.highestFloor >= ConstructionSite.FLOOR_COUNT
-                                ? "Открыт последний этаж" : "Нет свободного подходящего проёма";
-                        cards.add(card(offer, null, offer.difficulty().duration(), fits, false, fits ? "" : reason));
+                        anyRoomFits |= fits;
+                        String reason = "Нет свободного подходящего проёма";
+                        if (constructionPaused) {
+                            reason = blockedReason;
+                        } else if (account.highestFloor >= ConstructionSite.FLOOR_COUNT) {
+                            reason = "Открыт последний этаж";
+                        }
+                        boolean available = fits && !constructionPaused;
+                        cards.add(card(offer, null, offer.difficulty().duration(), available, false, available ? "" : reason));
                     }
                 }
-                if (cards.stream().noneMatch(ContractNetwork.Card::available)) {
+                if (!anyRoomFits) {
                     ContractData.Accepted extension = OfferFactory.extension(site, account);
                     if (extension != null) {
-                        cards.add(card(extension, null, extension.difficulty().duration(), true, false, ""));
+                        boolean available = !constructionPaused || extension.kind() == ContractData.Kind.STAIRS;
+                        cards.add(card(extension, null, extension.difficulty().duration(), available, false,
+                                available ? "" : blockedReason));
                     }
                 }
                 for (var yard : account.courtyards) {
-                    boolean fits = OfferFactory.canResume(site, yard);
-                    cards.add(card(yard, null, yard.difficulty().duration(), fits, false, fits ? "" : "Участок дворика занят"));
+                    boolean fits = !constructionPaused && OfferFactory.canResume(site, yard);
+                    String reason = constructionPaused ? blockedReason : "Участок дворика занят";
+                    cards.add(card(yard, null, yard.difficulty().duration(), fits, false, fits ? "" : reason));
                 }
             }
             state = cards.stream().anyMatch(ContractNetwork.Card::available)
