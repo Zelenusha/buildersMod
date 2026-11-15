@@ -78,7 +78,9 @@ final class OfferFactory {
     private static ContractData.Accepted sample(int slot) {
         SiteDoor origin = ConstructionSite.STARTER_DOORS.get(0);
         return proposal(origin, ContractBalance.Difficulty.ONE, SampleRoomBlueprint.at(origin.lower(), origin.outward()),
-                6, ContractData.Kind.SAMPLE, slot);
+                6, ContractData.Kind.SAMPLE, slot, new ContractData.Brief(ContractData.Kind.SAMPLE.title, List.of(
+                        "Внутри 5×5, квадратная", "Один этаж, высота 4", "Без узоров", "Проёмов: 4, окон: 0",
+                        "Свет: 2, мебель: верстак")));
     }
 
     private static ContractData.Accepted generate(ServerPlayer player, ServerLevel site, ContractData.Account account, int slot,
@@ -100,7 +102,8 @@ final class OfferFactory {
                     generated -> scan(site, generated.blueprint(), occupied, account.highestFloor) != null);
             if (match.isPresent()) {
                 var room = match.orElseThrow();
-                return proposal(door, level, room.blueprint(), ContractBalance.wage(level, room), ContractData.Kind.ROOM, slot);
+                return proposal(door, level, room.blueprint(), ContractBalance.wage(level, room), ContractData.Kind.ROOM, slot,
+                        new ContractData.Brief(room.title(), room.conditions()));
             }
         }
         return null;
@@ -191,7 +194,9 @@ final class OfferFactory {
         Placement placement = scan(site, blueprint, occupied, account.highestFloor);
         var level = ContractBalance.Difficulty.ONE;
         return proposal(new SiteDoor(entry.lowerPosition().relative(entry.outward()), outward), level,
-                placement.blueprint(), specialWage(level, placement.blueprint()), ContractData.Kind.CORRIDOR, -1);
+                placement.blueprint(), specialWage(level, placement.blueprint()), ContractData.Kind.CORRIDOR, -1,
+                new ContractData.Brief(ContractData.Kind.CORRIDOR.title, List.of("Коридор шириной 3 блока, высота 4",
+                        "Три новых проёма с дверями", "Факел у входа")));
     }
 
     static ContractData.Accepted courtyard(ServerLevel site, ContractData.Account account, ContractData.Accepted room) {
@@ -205,7 +210,9 @@ final class OfferFactory {
         Placement placement = scan(site, yard.orElseThrow(), occupied, account.highestFloor);
         var gate = placement.blueprint().doors().get(0);
         return proposal(new SiteDoor(gate.lowerPosition(), gate.outward()), room.difficulty(), placement.blueprint(),
-                specialWage(room.difficulty(), placement.blueprint()), ContractData.Kind.COURTYARD, account.nextCourtyardSlot);
+                specialWage(room.difficulty(), placement.blueprint()), ContractData.Kind.COURTYARD, account.nextCourtyardSlot,
+                new ContractData.Brief(ContractData.Kind.COURTYARD.title, List.of("Один ряд забора по периметру",
+                        "Калитка напротив окна", "Пол из земли или дёрна", "Верх открыт")));
     }
 
     static boolean canResume(ServerLevel site, ContractData.Accepted proposal) {
@@ -234,13 +241,31 @@ final class OfferFactory {
         var level = ContractBalance.Difficulty.TWO;
         return SiteStairBlueprint.createFitting(floor, materials, stone, brick, site::getBlockState)
                 .map(blueprint -> proposal(new SiteDoor(new BlockPos(0, floor + 1, 0), Direction.WEST),
-                        level, blueprint, specialWage(level, blueprint), ContractData.Kind.STAIRS, -1)).orElse(null);
+                        level, blueprint, specialWage(level, blueprint), ContractData.Kind.STAIRS, -1,
+                        new ContractData.Brief(ContractData.Kind.STAIRS.title, List.of(
+                                "Лестница вдоль стены стартовой комнаты", "Стартовая комната 7×7 этажом выше",
+                                "Убрать отмеченные блоки перекрытия")))).orElse(null);
     }
 
     private static ContractData.Accepted proposal(SiteDoor door, ContractBalance.Difficulty level, RoomBlueprint blueprint,
-                                                   int wage, ContractData.Kind kind, int slot) {
+                                                   int wage, ContractData.Kind kind, int slot, ContractData.Brief brief) {
         return new ContractData.Accepted(door.lower(), door.outward(), level, 0, false, blueprint, wage, kind, slot, 0,
-                Map.of());
+                Map.of(), brief);
+    }
+
+    /** The positions just outside each window pane. A window to the street keeps them open (FR-89). */
+    static List<BlockPos> windowOutlooks(RoomBlueprint room) {
+        RoomBlueprint.Bounds bounds = room.bounds();
+        List<BlockPos> outside = new ArrayList<>();
+        room.requirements().forEach((pos, requirement) -> {
+            if (requirement.criterion() == RoomBlueprint.Criterion.WINDOWS) {
+                Direction face = pos.getX() == bounds.min().getX() ? Direction.WEST
+                        : pos.getX() == bounds.max().getX() ? Direction.EAST
+                        : pos.getZ() == bounds.min().getZ() ? Direction.NORTH : Direction.SOUTH;
+                outside.add(pos.relative(face));
+            }
+        });
+        return outside;
     }
 
     private static List<SiteDoor> doors(ContractData.Account account) {
@@ -257,7 +282,7 @@ final class OfferFactory {
         return doors;
     }
 
-    private static List<RoomBlueprint.Bounds> occupied(ContractData.Account account) {
+    static List<RoomBlueprint.Bounds> occupied(ContractData.Account account) {
         List<RoomBlueprint.Bounds> occupied = new ArrayList<>();
         account.rooms.stream().filter(order -> order.kind() != ContractData.Kind.STAIRS)
                 .map(order -> order.blueprint().bounds()).forEach(occupied::add);
@@ -269,6 +294,10 @@ final class OfferFactory {
         if (account.active != null && account.active.kind() != ContractData.Kind.STAIRS) {
             occupied.add(account.active.blueprint().bounds());
         }
+        // FR-89: later rooms may not close the view from the windows of a finished or active room.
+        java.util.stream.Stream.concat(account.rooms.stream(), java.util.stream.Stream.ofNullable(account.active))
+                .flatMap(order -> windowOutlooks(order.blueprint()).stream())
+                .map(pos -> new RoomBlueprint.Bounds(pos, pos)).forEach(occupied::add);
         return occupied;
     }
 
@@ -284,12 +313,19 @@ final class OfferFactory {
                 && upper.getValue(DoorBlock.FACING) == facing && facing.getAxis() == door.outward().getAxis();
     }
 
-    private static Placement scan(ServerLevel site, RoomBlueprint candidate, List<RoomBlueprint.Bounds> occupied, int floorCount) {
+    static Placement scan(ServerLevel site, RoomBlueprint candidate, List<RoomBlueprint.Bounds> occupied, int floorCount) {
         int lastOpen = ConstructionSite.START_FLOOR_Y + (floorCount - 1) * ConstructionSite.FLOOR_STEP;
         int next = lastOpen + ConstructionSite.FLOOR_STEP;
         if (site.isOutsideBuildHeight(candidate.bounds().min()) || site.isOutsideBuildHeight(candidate.bounds().max())
                 || (floorCount < ConstructionSite.FLOOR_COUNT && candidate.bounds().max().getY() >= next)) {
             return null;
+        }
+        for (BlockPos outside : windowOutlooks(candidate)) {
+            // FR-89: a window that would face a wall, a column or another room rejects this placement.
+            if (Math.abs(outside.getX()) <= 4 && Math.abs(outside.getZ()) <= 4 || !site.getBlockState(outside).isAir()
+                    || occupied.stream().anyMatch(bounds -> bounds.contains(outside))) {
+                return null;
+            }
         }
         Map<BlockPos, RoomBlueprint.Requirement> requirements = new LinkedHashMap<>(candidate.requirements());
         Map<BlockPos, BlockState> originals = new LinkedHashMap<>();
@@ -326,5 +362,5 @@ final class OfferFactory {
                 candidate.bonus()), Map.copyOf(originals));
     }
 
-    private record Placement(RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) { }
+    record Placement(RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) { }
 }

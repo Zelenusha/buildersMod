@@ -47,12 +47,28 @@ public final class ContractData extends SavedData {
         }
     }
 
+    /** The name of an order and its mandatory conditions in words, as the foreman's card shows them. */
+    public record Brief(String title, List<String> conditions) {
+        public Brief {
+            conditions = List.copyOf(conditions);
+        }
+    }
+
     public record Accepted(BlockPos anchor, Direction outward, ContractBalance.Difficulty difficulty,
                            long deadline, boolean extraDay, RoomBlueprint blueprint, int wage, Kind kind, int slot,
-                           int lateCount, Map<BlockPos, net.minecraft.world.level.block.state.BlockState> clearanceOriginals) {
+                           int lateCount, Map<BlockPos, net.minecraft.world.level.block.state.BlockState> clearanceOriginals,
+                           Brief brief) {
+        /** An order without its own description is shown under the title of its kind. */
+        public Accepted(BlockPos anchor, Direction outward, ContractBalance.Difficulty difficulty, long deadline,
+                        boolean extraDay, RoomBlueprint blueprint, int wage, Kind kind, int slot, int lateCount,
+                        Map<BlockPos, net.minecraft.world.level.block.state.BlockState> clearanceOriginals) {
+            this(anchor, outward, difficulty, deadline, extraDay, blueprint, wage, kind, slot, lateCount, clearanceOriginals,
+                    new Brief(kind.title, List.of()));
+        }
+
         public Accepted withExtraDay(long now) {
             return new Accepted(anchor, outward, difficulty, Math.max(now, deadline) + ContractBalance.TICKS_PER_DAY, true,
-                    blueprint, wage, kind, slot, lateCount, clearanceOriginals);
+                    blueprint, wage, kind, slot, lateCount, clearanceOriginals, brief);
         }
 
         public Accepted started(long time) {
@@ -61,13 +77,13 @@ public final class ContractData extends SavedData {
 
         public Accepted withDeadline(long nextDeadline, int nextLateCount) {
             return new Accepted(anchor, outward, difficulty, nextDeadline, extraDay, blueprint, wage, kind, slot,
-                    nextLateCount, clearanceOriginals);
+                    nextLateCount, clearanceOriginals, brief);
         }
 
         public Accepted rebound(BlockPos nextAnchor, Direction nextOutward, RoomBlueprint placed,
                                 Map<BlockPos, net.minecraft.world.level.block.state.BlockState> originals) {
             return new Accepted(nextAnchor, nextOutward, difficulty, deadline, extraDay, placed, wage, kind, slot,
-                    lateCount, originals);
+                    lateCount, originals, brief);
         }
     }
 
@@ -200,7 +216,9 @@ public final class ContractData extends SavedData {
             }
             return new Accepted(anchor, outward, ContractBalance.Difficulty.values()[difficulty], tag.getLong("Deadline"),
                     tag.getBoolean("ExtraDay"), blueprint, tag.contains("Wage") ? tag.getInt("Wage") : 6, kind,
-                    tag.getInt("Slot"), tag.getInt("LateCount"), Map.copyOf(originals));
+                    tag.getInt("Slot"), tag.getInt("LateCount"), Map.copyOf(originals),
+                    new Brief(tag.contains("Title") ? tag.getString("Title") : kind.title,
+                            tag.getList("Conditions", Tag.TAG_STRING).stream().map(Tag::getAsString).toList()));
         } catch (IllegalArgumentException invalid) {
             return null;
         }
@@ -227,6 +245,10 @@ public final class ContractData extends SavedData {
         order.putInt("Wage", contract.wage());
         order.putInt("Slot", contract.slot());
         order.putInt("LateCount", contract.lateCount());
+        order.putString("Title", contract.brief().title());
+        ListTag conditions = new ListTag();
+        contract.brief().conditions().forEach(line -> conditions.add(net.minecraft.nbt.StringTag.valueOf(line)));
+        order.put("Conditions", conditions);
         ListTag states = new ListTag();
         contract.clearanceOriginals().forEach((position, state) -> {
             CompoundTag entry = new CompoundTag();

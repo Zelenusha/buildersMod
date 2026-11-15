@@ -9,7 +9,8 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 final class ForemanScreen extends Screen {
-    private static final int WIDTH = 316;
+    private static final int WIDTH = 356;
+    private static final int COLUMN = 162;
     private static final int HEIGHT = 227;
     private static final String[] GREETINGS = {
             "Работа у нас найдётся. Посмотрим, что ты умеешь строить.",
@@ -175,15 +176,22 @@ final class ForemanScreen extends Screen {
             graphics.drawString(font, "Бонус: " + label + " " + amount, x, y + 22,
                     active && card.bonusFound() == card.bonusTarget() ? 0x91DE92 : 0xE4E9ED, false);
         }
+        // FR-22: the mandatory conditions in words on the left, the material list on the right.
+        for (int index = 0; index < Math.min(card.conditions().size(), 6); index++) {
+            graphics.drawString(font, font.plainSubstrByWidth(card.conditions().get(index), COLUMN), x,
+                    y + 34 + index * 10, 0xB9C4CC, false);
+        }
+        int materialsX = card.conditions().isEmpty() ? x : x + COLUMN + 8;
         int limit = Math.min(card.materials().size(), materialOffset + 5);
         for (int index = materialOffset; index < limit; index++) {
             ContractNetwork.Material material = card.materials().get(index);
             int rowY = y + 34 + (index - materialOffset) * 11;
-            String label = Component.translatable(material.label()).getString();
             String amount = active ? material.placed() + "/" + material.needed() : "×" + material.needed();
+            String label = font.plainSubstrByWidth(Component.translatable(material.label()).getString(),
+                    COLUMN - font.width(" " + amount));
             int color = active && material.placed() == material.needed() ? 0x91DE92 : 0xE4E9ED;
-            graphics.drawString(font, label + " " + amount, x, rowY, color, false);
-            if (!material.substitutes().isEmpty() && mouseX >= x && mouseX <= x + WIDTH - 24
+            graphics.drawString(font, label + " " + amount, materialsX, rowY, color, false);
+            if (!material.substitutes().isEmpty() && mouseX >= materialsX && mouseX <= materialsX + COLUMN
                     && mouseY >= rowY && mouseY < rowY + 11) {
                 List<Component> lines = java.util.Arrays.stream(material.substitutes().split(","))
                         .map(key -> (Component) Component.translatable(key)).toList();

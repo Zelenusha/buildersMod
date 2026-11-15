@@ -632,7 +632,7 @@ public final class ContractEvents {
                                                       boolean available, UUID id, BlockPos room) {
         return new ContractNetwork.Card(slot, kind.title, level.ordinal() + 1, level.emeralds(), 0, -1,
                 available, false, 0, room.toShortString(), 0, 0, List.of(), id, kind == IncidentState.Kind.CLEANUP,
-                available ? "" : "Сначала закончи срочное задание");
+                available ? "" : "Сначала закончи срочное задание", List.of());
     }
 
     private record MaterialKey(net.minecraft.world.item.Item primary, List<net.minecraft.world.item.Item> substitutes) { }
@@ -675,11 +675,11 @@ public final class ContractEvents {
             return new ContractNetwork.Material(group.primary().getDescriptionId(), names, counts[0], counts[1]);
         }).toList();
         var bonus = order.blueprint().bonus().orElse(null);
-        return new ContractNetwork.Card(order.slot(), order.kind().title, order.difficulty().ordinal() + 1,
+        return new ContractNetwork.Card(order.slot(), order.brief().title(), order.difficulty().ordinal() + 1,
                 order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, canBuyTime,
                 check == null ? 0 : check.mismatchCount(), bonus == null ? "" : bonus.block().asItem().getDescriptionId(),
                 check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials, null, false,
-                note);
+                note, order.brief().conditions());
     }
 
     private static void sync(ServerPlayer player, ContractData data, ContractData.Account account) {

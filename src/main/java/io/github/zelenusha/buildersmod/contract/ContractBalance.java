@@ -57,7 +57,7 @@ public final class ContractBalance {
         wage += switch (spec.heights().size()) { case 3 -> 18; case 2 -> 8; default -> 0; };
         wage += patternWage(spec.floor().pattern()) + patternWage(spec.walls().pattern()) + patternWage(spec.ceiling().pattern());
         for (var window : spec.windows()) {
-            wage += 1 + switch (window.width()) { case 5 -> 4; case 3 -> 2; case 2 -> 1; default -> 0; };
+            wage += window.outlook().rate() + switch (window.width()) { case 5 -> 4; case 3 -> 2; case 2 -> 1; default -> 0; };
         }
         for (var fixture : spec.furniture()) {
             wage += fixture.state().is(Blocks.WHITE_BED) ? 2 : 1;

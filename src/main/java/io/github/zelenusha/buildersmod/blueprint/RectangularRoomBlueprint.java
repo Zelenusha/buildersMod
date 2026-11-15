@@ -85,10 +85,29 @@ public final class RectangularRoomBlueprint {
         }
     }
 
-    public record Window(int storey, Wall wall, int offset, int bottom, int width, int height, Block glass) {
+    /** Where a window looks. The rate is the direction part of the window surcharge (FR-88). */
+    public enum Outlook {
+        STREET(1),
+        INTERIOR(2),
+        HALL(3);
+
+        private final int rate;
+
+        Outlook(int rate) {
+            this.rate = rate;
+        }
+
+        public int rate() {
+            return rate;
+        }
+    }
+
+    public record Window(int storey, Wall wall, int offset, int bottom, int width, int height, Block glass,
+                         Outlook outlook) {
         public Window {
             Objects.requireNonNull(wall, "wall");
             Objects.requireNonNull(glass, "glass");
+            Objects.requireNonNull(outlook, "outlook");
             boolean supportedSize = width == 1 && height == 1 || width == 2 && height == 2
                     || width == 3 && height == 3 || width == 5 && height == 3;
             if (!supportedSize || offset < 1 || bottom < 1 || storey < 0) {
@@ -98,6 +117,11 @@ public final class RectangularRoomBlueprint {
                     && !(glass instanceof StainedGlassPaneBlock)) {
                 throw new IllegalArgumentException("Window must specify full glass or a glass pane");
             }
+        }
+
+        /** A window to the open deck or to a courtyard. */
+        public Window(int storey, Wall wall, int offset, int bottom, int width, int height, Block glass) {
+            this(storey, wall, offset, bottom, width, height, glass, Outlook.STREET);
         }
     }
 

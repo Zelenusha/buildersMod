@@ -32,7 +32,8 @@ public final class ContractNetwork {
 
     public record Card(int slot, String title, int level, int wage, int bonus, long remaining, boolean available,
                        boolean canBuyTime, int missing, String bonusLabel, int bonusFound, int bonusTarget,
-                       List<Material> materials, UUID incidentId, boolean canParallel, String note) {
+                       List<Material> materials, UUID incidentId, boolean canParallel, String note,
+                       List<String> conditions) {
         void write(FriendlyByteBuf buffer) {
             buffer.writeVarInt(slot).writeUtf(title, 128).writeVarInt(level).writeVarInt(wage).writeVarInt(bonus)
                     .writeVarLong(remaining);
@@ -43,13 +44,15 @@ public final class ContractNetwork {
             buffer.writeNullable(incidentId, FriendlyByteBuf::writeUUID);
             buffer.writeBoolean(canParallel);
             buffer.writeUtf(note, 128);
+            buffer.writeCollection(conditions, (buf, line) -> buf.writeUtf(line, 128));
         }
 
         static Card read(FriendlyByteBuf buffer) {
             return new Card(buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(),
                     buffer.readVarInt(), buffer.readVarLong(), buffer.readBoolean(), buffer.readBoolean(),
                     buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(), buffer.readList(Material::read),
-                    buffer.readNullable(FriendlyByteBuf::readUUID), buffer.readBoolean(), buffer.readUtf(128));
+                    buffer.readNullable(FriendlyByteBuf::readUUID), buffer.readBoolean(), buffer.readUtf(128),
+                    buffer.readList(buf -> buf.readUtf(128)));
         }
     }
 
@@ -163,7 +166,7 @@ public final class ContractNetwork {
         }
     }
 
-    private static final String PROTOCOL = "6";
+    private static final String PROTOCOL = "7";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "contracts"), () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals);
 
@@ -221,7 +224,7 @@ public final class ContractNetwork {
     }
 
     static void sync(ServerPlayer player, ContractData.Accepted order, long remaining) {
-        SiteView view = order == null ? new SiteView(null, null, 0) : new SiteView(order.blueprint().encode(), order.kind().title, remaining);
+        SiteView view = order == null ? new SiteView(null, null, 0) : new SiteView(order.blueprint().encode(), order.brief().title(), remaining);
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), view);
     }
 

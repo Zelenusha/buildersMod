@@ -65,7 +65,64 @@ public final class RoomGenerator {
         }
     }
 
-    public record GeneratedRoom(RoomBlueprint blueprint, SizeCategory sizeCategory, int difficulty, Spec spec) {
+    /** What the room is for. The first functional block picks the name, the furniture weights stay as specified. */
+    public enum Category {
+        LIVING("Гостиная", "Гостиная с очагом", "Спальня", "Комната отдыха"),
+        UTILITY("Кладовая", "Кухня", "Каморка сторожа", "Прачечная"),
+        WORK("Кабинет", "Лаборатория", "Кабинет с кушеткой", "Мастерская"),
+        INDUSTRIAL("Склад", "Плавильня", "Бытовка", "Цех"),
+        PUBLIC("Зал", "Столовая", "Ночлежка", "Кружок умелых рук"),
+        ABSURD("Комната без назначения", "Кондитерская с плавильней", "Спальня посреди цеха", "Библиотека с верстаком");
+
+        private final String empty;
+        private final String furnace;
+        private final String bed;
+        private final String bench;
+
+        Category(String empty, String furnace, String bed, String bench) {
+            this.empty = empty;
+            this.furnace = furnace;
+            this.bed = bed;
+            this.bench = bench;
+        }
+
+        String roomName(Spec spec) {
+            if (spec.furniture().isEmpty()) {
+                return empty;
+            }
+            BlockState first = spec.furniture().get(0).state();
+            return first.is(Blocks.FURNACE) ? furnace : first.is(Blocks.WHITE_BED) ? bed : bench;
+        }
+    }
+
+    /** The look of the room. A style prefers its own materials inside the rarity tier drawn by the weights. */
+    public enum Style {
+        RUSTIC("деревенский стиль", Blocks.OAK_PLANKS, Blocks.CHERRY_PLANKS, Blocks.COBBLESTONE, Blocks.HAY_BLOCK),
+        MASONRY("каменный стиль", Blocks.STONE, Blocks.STONE_BRICKS, Blocks.SMOOTH_STONE, Blocks.ANDESITE, Blocks.DIORITE,
+                Blocks.GRANITE, Blocks.BRICKS, Blocks.DEEPSLATE_BRICKS, Blocks.CALCITE, Blocks.POLISHED_BLACKSTONE,
+                Blocks.OBSIDIAN, Blocks.END_STONE_BRICKS, Blocks.CRYING_OBSIDIAN),
+        PALACE("парадный стиль", Blocks.SANDSTONE, Blocks.COPPER_BLOCK, Blocks.CUT_COPPER, Blocks.QUARTZ_BLOCK,
+                Blocks.AMETHYST_BLOCK, Blocks.PURPUR_BLOCK, Blocks.PRISMARINE, Blocks.DIAMOND_BLOCK, Blocks.NETHERITE_BLOCK),
+        ECLECTIC("эклектика");
+
+        private final String title;
+        private final Set<Block> preferred;
+
+        Style(String title, Block... preferred) {
+            this.title = title;
+            this.preferred = Set.of(preferred);
+        }
+    }
+
+    public record GeneratedRoom(RoomBlueprint blueprint, SizeCategory sizeCategory, int difficulty, Spec spec,
+                                Category category, Style style) {
+        public String title() {
+            return category.roomName(spec) + " · " + style.title;
+        }
+
+        public List<String> conditions() {
+            return describe(spec);
+        }
     }
 
     public static Optional<GeneratedRoom> generate(RandomSource random, int difficulty, BlockPos anchorLower,
@@ -84,8 +141,10 @@ public final class RoomGenerator {
         if (!available.test(Blocks.OAK_DOOR) || !hasAvailableLight(level, available)) {
             return Optional.empty();
         }
-        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            Optional<GeneratedRoom> candidate = generateCandidate(random, level, anchorLower, outward, available);
+        for (int attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
+            // FR-68: when no weighted design fits, the last attempt is the most compact room of this level.
+            Optional<GeneratedRoom> candidate = generateCandidate(random, level, anchorLower, outward, available,
+                    attempt == MAX_ATTEMPTS);
             if (candidate.isPresent() && placementAllowed.test(candidate.orElseThrow())) {
                 return candidate;
             }
@@ -94,9 +153,13 @@ public final class RoomGenerator {
     }
 
     private static Optional<GeneratedRoom> generateCandidate(RandomSource random, int level, BlockPos anchor,
-                                                            Direction outward, Predicate<Block> available) {
-        SizeCategory size = SizeCategory.values()[weighted(random, SIZE[level])];
-        boolean square = weighted(random, FORM[level]) == 0;
+                                                            Direction outward, Predicate<Block> available,
+                                                            boolean compact) {
+        // FR-65: the purpose and the look are drawn independently of each other and of the geometry.
+        Category category = Category.values()[random.nextInt(Category.values().length)];
+        Style style = Style.values()[random.nextInt(Style.values().length)];
+        SizeCategory size = SizeCategory.values()[compact ? firstPositive(SIZE[level]) : weighted(random, SIZE[level])];
+        boolean square = compact || weighted(random, FORM[level]) == 0;
         int width = square ? Math.min(size.width, size.depth) : size.width;
         int depth = square ? width : size.width == size.depth ? size.depth + 2 : size.depth;
         List<Integer> heights = new ArrayList<>();
@@ -105,19 +168,19 @@ public final class RoomGenerator {
             storeyWeights[1] = 0;
             storeyWeights[2] = 0;
         }
-        int numStoreys = weighted(random, storeyWeights) + 1;
+        int numStoreys = compact ? 1 : weighted(random, storeyWeights) + 1;
         for (int storey = 0; storey < numStoreys; storey++) {
-            heights.add(4 + weighted(random, HEIGHT[level]));
+            heights.add(4 + (compact ? firstPositive(HEIGHT[level]) : weighted(random, HEIGHT[level])));
         }
 
-        Optional<Surface> floor = selectSurface(random, level, available);
-        Optional<Surface> walls = selectSurface(random, level, available);
-        Optional<Surface> ceiling = selectSurface(random, level, available);
+        Optional<Surface> floor = selectSurface(random, level, available, style);
+        Optional<Surface> walls = selectSurface(random, level, available, style);
+        Optional<Surface> ceiling = selectSurface(random, level, available, style);
         if (floor.isEmpty() || walls.isEmpty() || ceiling.isEmpty()) {
             return Optional.empty();
         }
         Set<Wall> doors = chooseExtraDoors(random);
-        List<Window> windows = selectWindows(random, level, width, depth, heights, doors, available);
+        List<Window> windows = compact ? List.of() : selectWindows(random, level, width, depth, heights, doors, available);
         Optional<RoomBlueprint.Bonus> bonus = available.test(Blocks.CAKE)
                 ? Optional.of(new RoomBlueprint.Bonus(Blocks.CAKE, 3, 5)) : Optional.empty();
         Passage passage = choosePassage(random, width, depth, heights, available);
@@ -133,17 +196,17 @@ public final class RoomGenerator {
             List<Fixture> lights = new ArrayList<>(basicLight);
             List<Fixture> furniture = new ArrayList<>();
             List<FixturePosition> inside = supportedFixturePositions(skeleton, anchor, outward, width, depth, heights);
-            for (int index = 1, count = weighted(random, LIGHT_COUNT[level]) + 1; index < count; index++) {
+            for (int index = 1, count = compact ? 1 : weighted(random, LIGHT_COUNT[level]) + 1; index < count; index++) {
                 pickLight(random, level, available, inside, lights);
             }
-            int furnCount = weighted(random, FURNITURE_COUNT[level]);
+            int furnCount = compact ? 0 : weighted(random, FURNITURE_COUNT[level]);
             for (int index = 0; index < furnCount; index++) {
                 pickFurniture(random, available, inside, furniture);
             }
             Spec spec = new Spec(width, depth, heights, shell.floor(), shell.walls(), shell.ceiling(), doors, windows,
                     lights, furniture, bonus, passage);
             RoomBlueprint blueprint = RectangularRoomBlueprint.at(anchor, outward, spec);
-            return Optional.of(new GeneratedRoom(blueprint, size, level + 1, spec));
+            return Optional.of(new GeneratedRoom(blueprint, size, level + 1, spec, category, style));
         } catch (IllegalArgumentException incompatibleGeometry) {
             return Optional.empty();
         }
@@ -171,8 +234,9 @@ public final class RoomGenerator {
         return doors;
     }
 
-    private static Optional<Surface> selectSurface(RandomSource random, int level, Predicate<Block> available) {
-        Optional<Block> primary = chooseMaterial(random, level, available);
+    private static Optional<Surface> selectSurface(RandomSource random, int level, Predicate<Block> available,
+                                                   Style style) {
+        Optional<Block> primary = chooseMaterial(random, level, available, style);
         if (primary.isEmpty()) {
             return Optional.empty();
         }
@@ -186,11 +250,12 @@ public final class RoomGenerator {
         if (pattern == Pattern.NONE) {
             return Optional.of(Surface.solid(block));
         }
-        return chooseMaterial(random, level, alternate).map(candidate -> new Surface(block.defaultBlockState(), pattern,
+        return chooseMaterial(random, level, alternate, style).map(candidate -> new Surface(block.defaultBlockState(), pattern,
                 Optional.of(candidate.defaultBlockState())));
     }
 
-    private static Optional<Block> chooseMaterial(RandomSource random, int level, Predicate<Block> available) {
+    private static Optional<Block> chooseMaterial(RandomSource random, int level, Predicate<Block> available,
+                                                  Style style) {
         List<List<Block>> byRarity = structureMaterials();
         int[] weights = RARITY[level].clone();
         List<List<Block>> eligible = new ArrayList<>();
@@ -202,14 +267,59 @@ public final class RoomGenerator {
             eligible.add(materials);
         }
         int tier = weighted(random, weights);
-        return tier < 0 ? Optional.empty() : Optional.of(pick(random, eligible.get(tier)));
+        if (tier < 0) {
+            return Optional.empty();
+        }
+        List<Block> inStyle = eligible.get(tier).stream().filter(style.preferred::contains).toList();
+        return Optional.of(pick(random, inStyle.isEmpty() ? eligible.get(tier) : inStyle));
+    }
+
+    private static int firstPositive(int[] weights) {
+        for (int index = 0; index < weights.length; index++) {
+            if (weights[index] > 0) {
+                return index;
+            }
+        }
+        throw new IllegalStateException("A weight table needs a positive entry");
+    }
+
+    /** The mandatory conditions in the words shown on the foreman's card (FR-22). */
+    static List<String> describe(Spec spec) {
+        List<String> lines = new ArrayList<>();
+        lines.add("Внутри " + spec.width() + "×" + spec.depth() + (spec.width() == spec.depth() ? ", квадратная" : ", прямоугольная"));
+        String heights = String.join(", ", spec.heights().stream().map(String::valueOf).toList());
+        lines.add(spec.heights().size() == 1 ? "Один этаж, высота " + heights
+                : "Этажей: " + spec.heights().size() + ", высоты " + heights);
+        if (spec.heights().size() > 1) {
+            lines.add(spec.passage() == Passage.STAIRS ? "Подъём по ступеням" : "Подъём по приставной лестнице");
+        }
+        List<String> patterns = new ArrayList<>();
+        addPattern(patterns, "стены", spec.walls());
+        addPattern(patterns, "пол", spec.floor());
+        addPattern(patterns, "потолок", spec.ceiling());
+        lines.add(patterns.isEmpty() ? "Без узоров" : "Узор: " + String.join(", ", patterns));
+        lines.add("Проёмов: " + (spec.extraDoors().size() + 1) + ", окон: " + spec.windows().size());
+        List<String> furniture = spec.furniture().stream().map(fixture -> fixture.state().is(Blocks.FURNACE) ? "печь"
+                : fixture.state().is(Blocks.WHITE_BED) ? "кровать" : "верстак").toList();
+        lines.add("Свет: " + spec.lights().size() + ", мебель: " + (furniture.isEmpty() ? "нет" : String.join(", ", furniture)));
+        return lines;
+    }
+
+    private static void addPattern(List<String> patterns, String surface, Surface design) {
+        switch (design.pattern()) {
+            case CHECKERBOARD -> patterns.add(surface + " в шахматку");
+            case STRIPES -> patterns.add(surface + " в полоску");
+            case SPECKLES -> patterns.add(surface + " в крапинку");
+            case NONE -> { }
+        }
     }
 
     private static List<List<Block>> structureMaterials() {
         return List.of(
                 List.of(Blocks.STONE, Blocks.COBBLESTONE, Blocks.STONE_BRICKS, Blocks.OAK_PLANKS, Blocks.GRANITE,
-                        Blocks.DIORITE, Blocks.ANDESITE, Blocks.SANDSTONE),
-                List.of(Blocks.DEEPSLATE_BRICKS, Blocks.CHERRY_PLANKS, Blocks.COPPER_BLOCK, Blocks.CUT_COPPER),
+                        Blocks.DIORITE, Blocks.ANDESITE, Blocks.SANDSTONE, Blocks.SMOOTH_STONE),
+                List.of(Blocks.DEEPSLATE_BRICKS, Blocks.CHERRY_PLANKS, Blocks.COPPER_BLOCK, Blocks.CUT_COPPER,
+                        Blocks.HAY_BLOCK, Blocks.BRICKS),
                 List.of(Blocks.AMETHYST_BLOCK, Blocks.CALCITE, Blocks.POLISHED_BLACKSTONE, Blocks.QUARTZ_BLOCK,
                         Blocks.OBSIDIAN),
                 List.of(Blocks.PURPUR_BLOCK, Blocks.END_STONE_BRICKS, Blocks.CRYING_OBSIDIAN, Blocks.PRISMARINE),
@@ -243,8 +353,11 @@ public final class RoomGenerator {
         for (int floor = 0; floor < heights.size(); floor++) {
             int height = heights.get(floor);
             for (Wall wall : Wall.values()) {
+                if (floor == 0 && wall == Wall.ENTRANCE) {
+                    continue; // FR-89: the lower entrance wall faces the wall of the adjoining room.
+                }
                 int length = wall == Wall.ENTRANCE || wall == Wall.OPPOSITE ? width : depth;
-                int bottom = floor == 0 && (wall == Wall.ENTRANCE || doors.contains(wall)) ? 3 : 2;
+                int bottom = floor == 0 && doors.contains(wall) ? 3 : 2;
                 for (int[] size : GLAZING_SIZES) {
                     if (bottom + size[1] - 1 <= height && length >= size[0]) {
                         candidates.add(new WindowPlace(floor, wall, (length - size[0]) / 2 + 1, bottom, size[0], size[1]));
