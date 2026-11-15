@@ -1,6 +1,7 @@
 package io.github.zelenusha.buildersmod.contract;
 
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.WindowDestination;
 import io.github.zelenusha.buildersmod.blueprint.RoomGenerator;
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
@@ -99,10 +100,12 @@ final class OfferFactory {
                 continue;
             }
             var match = RoomGenerator.generate(random, level.ordinal() + 1, door.lower(), door.outward(), available,
-                    generated -> scan(site, generated.blueprint(), occupied, account.highestFloor) != null);
+                    generated -> scan(site, generated.blueprint(), occupied, account.highestFloor) != null
+                            && classifyWindows(site, account, generated.blueprint(), occupied) != null);
             if (match.isPresent()) {
                 var room = match.orElseThrow();
-                return proposal(door, level, room.blueprint(), ContractBalance.wage(level, room), ContractData.Kind.ROOM, slot);
+                var blueprint = classifyWindows(site, account, room.blueprint(), occupied);
+                return proposal(door, level, blueprint, ContractBalance.wage(level, room, blueprint), ContractData.Kind.ROOM, slot);
             }
         }
         return null;
@@ -153,7 +156,11 @@ final class OfferFactory {
                                                    SiteDoor door, List<RoomBlueprint.Bounds> occupied) {
         RoomBlueprint candidate = offer.blueprint().reorient(offer.anchor(), offer.outward(), door.lower(), door.outward());
         Placement placement = scan(site, candidate, occupied, account.highestFloor);
-        return placement == null ? null : offer.rebound(door.lower(), door.outward(), placement.blueprint(), placement.originals());
+        if (placement == null) {
+            return null;
+        }
+        var windows = classifyWindows(site, account, placement.blueprint(), occupied);
+        return windows == null ? null : offer.rebound(door.lower(), door.outward(), windows, placement.originals());
     }
 
     static ContractData.Accepted extension(ServerLevel site, ContractData.Account account) {
@@ -199,8 +206,12 @@ final class OfferFactory {
     static ContractData.Accepted courtyard(ServerLevel site, ContractData.Account account, ContractData.Accepted room) {
         List<RoomBlueprint.Bounds> occupied = occupied(account);
         occupied.add(room.blueprint().bounds());
-        var yard = SiteCourtyardBlueprint.createFitting(room.blueprint(), blueprint ->
-                scan(site, blueprint, occupied, account.highestFloor) != null);
+        RoomBlueprint blueprint = room.blueprint();
+        var yard = blueprint.windows().isEmpty()
+                ? SiteCourtyardBlueprint.createFitting(blueprint, yardPlan -> scan(site, yardPlan, occupied, account.highestFloor) != null)
+                : blueprint.windows().stream().filter(window -> window.destination() == WindowDestination.COURTYARD)
+                        .map(window -> availableCourtyard(site, account, blueprint, window, occupied))
+                        .filter(java.util.Objects::nonNull).findFirst();
         if (yard.isEmpty()) {
             return null;
         }
@@ -341,7 +352,7 @@ final class OfferFactory {
             }
         }
         return new Placement(RoomBlueprint.of(candidate.bounds(), candidate.interiorVolumes(), requirements, candidate.doors(),
-                candidate.bonus()), Map.copyOf(originals));
+                candidate.bonus(), candidate.windows()), Map.copyOf(originals));
     }
 
     static boolean windowsHaveSpace(ServerLevel site, RoomBlueprint candidate) {
@@ -370,6 +381,90 @@ final class OfferFactory {
         return true;
     }
 
+    private static RoomBlueprint classifyWindows(ServerLevel site, ContractData.Account account, RoomBlueprint room,
+                                                  List<RoomBlueprint.Bounds> occupied) {
+        if (room.windows().isEmpty()) {
+            return room;
+        }
+        var windows = new ArrayList<RoomBlueprint.Window>();
+        boolean reserved = false;
+        for (var window : room.windows()) {
+            WindowDestination actual = windowDestination(site, account, window, occupied);
+            if (actual == null) {
+                return null;
+            }
+            if (window.destination() == WindowDestination.UNSPECIFIED) {
+                if (!reserved && actual == WindowDestination.STREET
+                        && availableCourtyard(site, account, room, window, occupied) != null) {
+                    actual = WindowDestination.COURTYARD;
+                    reserved = true;
+                }
+            } else if (window.destination() != actual) {
+                boolean courtyardFits = window.destination() == WindowDestination.COURTYARD && actual == WindowDestination.STREET
+                        && availableCourtyard(site, account, room, window, occupied) != null;
+                if (!courtyardFits) {
+                    return null;
+                }
+                actual = WindowDestination.COURTYARD;
+            }
+            windows.add(window.withDestination(actual));
+        }
+        return room.withWindows(windows);
+    }
+
+    private static RoomBlueprint availableCourtyard(ServerLevel site, ContractData.Account account, RoomBlueprint room,
+                                                   RoomBlueprint.Window window, List<RoomBlueprint.Bounds> occupied) {
+        var yard = SiteCourtyardBlueprint.create(room, window).orElse(null);
+        if (yard == null) {
+            return null;
+        }
+        var reserved = new ArrayList<>(occupied);
+        reserved.add(room.bounds());
+        return scan(site, yard, reserved, account.highestFloor) == null ? null : yard;
+    }
+
+    static WindowDestination windowDestination(ServerLevel site, ContractData.Account account, RoomBlueprint.Window window,
+                                                List<RoomBlueprint.Bounds> occupied) {
+        WindowTarget target = null;
+        for (BlockPos pane : window.opening().positions()) {
+            BlockPos visible = pane.relative(window.outward());
+            if (GLAZING.contains(site.getBlockState(visible).getBlock())) {
+                visible = visible.relative(window.outward());
+            }
+            if (!site.isEmptyBlock(visible)) {
+                return null;
+            }
+            WindowTarget tile = windowTarget(account, visible, occupied);
+            if (tile == null || (target != null && !target.equals(tile))) {
+                return null;
+            }
+            target = tile;
+        }
+        return target == null ? null : target.destination();
+    }
+
+    private static WindowTarget windowTarget(ContractData.Account account, BlockPos visible, List<RoomBlueprint.Bounds> occupied) {
+        int offset = visible.getY() - ConstructionSite.START_FLOOR_Y;
+        if (offset >= 0 && offset < account.highestFloor * ConstructionSite.FLOOR_STEP
+                && Math.abs(visible.getX()) <= 4 && Math.abs(visible.getZ()) <= 4) {
+            int layer = offset % ConstructionSite.FLOOR_STEP;
+            if (layer <= 5) {
+                return layer > 0 && layer < 5 && Math.abs(visible.getX()) < 4 && Math.abs(visible.getZ()) < 4
+                        ? new WindowTarget(WindowDestination.COMMON_HALL, new BlockPos(0, visible.getY() - layer, 0)) : null;
+            }
+        }
+        for (var order : account.rooms) {
+            if (order.kind() != ContractData.Kind.STAIRS && order.blueprint().bounds().contains(visible)) {
+                if (!order.blueprint().containsInterior(visible)) {
+                    return null;
+                }
+                WindowDestination kind = order.kind() == ContractData.Kind.COURTYARD ? WindowDestination.COURTYARD : WindowDestination.INTERIOR;
+                return new WindowTarget(kind, order.blueprint().bounds().min());
+            }
+        }
+        return occupied.stream().anyMatch(bounds -> bounds.contains(visible)) ? null : new WindowTarget(WindowDestination.STREET, null);
+    }
+
     private static boolean obstructsPlacement(ServerLevel site, BlockPos pos, BlockState state) {
         if (state.getDestroySpeed(site, pos) < 0 || !state.getFluidState().isEmpty()) {
             return true;
@@ -379,4 +474,6 @@ final class OfferFactory {
     }
 
     private record Placement(RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) { }
+
+    private record WindowTarget(WindowDestination destination, BlockPos origin) { }
 }

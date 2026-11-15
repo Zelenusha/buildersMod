@@ -725,7 +725,17 @@ public final class ContractEvents {
         if (counts.containsKey(RoomBlueprint.Criterion.LIGHTING)) {
             rows.add("Источников света " + counts.get(RoomBlueprint.Criterion.LIGHTING));
         }
-        if (counts.containsKey(RoomBlueprint.Criterion.WINDOWS)) {
+        for (var window : blueprint.windows()) {
+            String destination = switch (window.destination()) {
+                case STREET -> "на улицу";
+                case COURTYARD -> "во дворик";
+                case INTERIOR -> "в другое помещение";
+                case COMMON_HALL -> "в общий зал";
+                case UNSPECIFIED -> "по чертежу";
+            };
+            rows.add("Окно " + window.width() + "×" + window.height() + " · " + destination);
+        }
+        if (blueprint.windows().isEmpty() && counts.containsKey(RoomBlueprint.Criterion.WINDOWS)) {
             rows.add("Остекление по чертежу · " + counts.get(RoomBlueprint.Criterion.WINDOWS) + " блоков");
         }
         if (counts.containsKey(RoomBlueprint.Criterion.STAIRWAYS)) {

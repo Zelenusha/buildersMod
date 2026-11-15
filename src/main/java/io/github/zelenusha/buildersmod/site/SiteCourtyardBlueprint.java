@@ -90,6 +90,18 @@ public final class SiteCourtyardBlueprint {
         if (!windows(room).contains(window)) {
             throw new IllegalArgumentException("Window attachment does not belong to this room");
         }
+        return create(window);
+    }
+
+    public static Optional<RoomBlueprint> create(RoomBlueprint room, RoomBlueprint.Window window) {
+        BlockPos first = window.opening().min();
+        if (window.opening().max().getY() > room.interiorVolumes().get(0).max().getY()) {
+            return Optional.empty();
+        }
+        return Optional.of(create(new Attachment(first.atY(room.bounds().min().getY()), window.outward(), window.width())));
+    }
+
+    private static RoomBlueprint create(Attachment window) {
         int width = Math.max(MIN_WIDTH, window.windowWidth() + 2);
         Direction outward = window.outward();
         int margin = (width - window.windowWidth()) / 2;

@@ -5,6 +5,8 @@ import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Bounds;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Criterion;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Door;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Requirement;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Window;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.WindowDestination;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,7 +24,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 final class BlueprintTag {
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     private BlueprintTag() {
     }
@@ -62,6 +64,16 @@ final class BlueprintTag {
         }
         tag.put("doors", doors);
 
+        ListTag windows = new ListTag();
+        for (Window window : blueprint.windows()) {
+            CompoundTag entry = new CompoundTag();
+            entry.put("opening", writeBounds(window.opening()));
+            entry.putString("outward", window.outward().getName());
+            entry.putString("destination", window.destination().name());
+            windows.add(entry);
+        }
+        tag.put("windows", windows);
+
         blueprint.bonus().ifPresent(bonus -> {
             CompoundTag entry = new CompoundTag();
             entry.putString("block", BuiltInRegistries.BLOCK.getKey(bonus.block()).toString());
@@ -73,7 +85,8 @@ final class BlueprintTag {
     }
 
     static RoomBlueprint read(CompoundTag tag) {
-        if (tag.getInt("version") != VERSION || !tag.contains("bounds", Tag.TAG_COMPOUND)) {
+        int version = tag.getInt("version");
+        if ((version != 1 && version != VERSION) || !tag.contains("bounds", Tag.TAG_COMPOUND)) {
             throw new IllegalArgumentException("Unsupported or missing room blueprint version");
         }
         Bounds bounds = readBounds(tag.getCompound("bounds"));
@@ -117,13 +130,27 @@ final class BlueprintTag {
             doors.add(new Door(position, outward));
         }
 
+        List<Window> windows = new ArrayList<>();
+        if (version == VERSION) {
+            ListTag windowTags = tag.getList("windows", Tag.TAG_COMPOUND);
+            for (int index = 0; index < windowTags.size(); index++) {
+                CompoundTag entry = windowTags.getCompound(index);
+                Direction outward = Direction.byName(entry.getString("outward"));
+                if (outward == null) {
+                    throw new IllegalArgumentException("Invalid window direction");
+                }
+                windows.add(new Window(readBounds(entry.getCompound("opening")), outward,
+                        WindowDestination.valueOf(entry.getString("destination"))));
+            }
+        }
+
         Optional<Bonus> bonus = Optional.empty();
         if (tag.contains("bonus", Tag.TAG_COMPOUND)) {
             CompoundTag entry = tag.getCompound("bonus");
             bonus = Optional.of(new Bonus(readBlock(entry.getString("block")), entry.getInt("count"),
                     entry.getInt("emeralds")));
         }
-        return new RoomBlueprint(bounds, interiors, requirements, doors, bonus);
+        return new RoomBlueprint(bounds, interiors, requirements, doors, bonus, windows);
     }
 
     private static CompoundTag writeBounds(Bounds bounds) {

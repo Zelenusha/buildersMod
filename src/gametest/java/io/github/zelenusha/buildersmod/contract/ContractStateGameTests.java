@@ -2,6 +2,7 @@ package io.github.zelenusha.buildersmod.contract;
 
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.List;
 import java.util.Map;
@@ -53,7 +54,13 @@ public final class ContractStateGameTests {
                 List.of(), Optional.empty());
         BlockPos anchor = new BlockPos(201, 65, 201);
         var blueprint = RectangularRoomBlueprint.at(anchor, Direction.NORTH, spec);
-        var room = new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, 0, false, blueprint,
+        var window = blueprint.windows().get(0);
+        var street = new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, 0, false,
+                blueprint.withWindows(List.of(window.withDestination(RoomBlueprint.WindowDestination.STREET))),
+                6, ContractData.Kind.ROOM, 1, 0, Map.of());
+        helper.assertTrue(OfferFactory.courtyard(site, account, street) == null, "A street window does not reserve a courtyard");
+        var room = new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, 0, false,
+                blueprint.withWindows(List.of(window.withDestination(RoomBlueprint.WindowDestination.COURTYARD))),
                 6, ContractData.Kind.ROOM, 1, 0, Map.of());
         var yard = OfferFactory.courtyard(site, account, room);
         helper.assertTrue(yard != null && yard.slot() == -2 && yard.kind() == ContractData.Kind.COURTYARD,

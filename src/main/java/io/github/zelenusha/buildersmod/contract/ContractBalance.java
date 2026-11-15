@@ -51,18 +51,30 @@ public final class ContractBalance {
         throw new IllegalStateException("Difficulty weights do not sum to 200000");
     }
 
-    static int wage(Difficulty difficulty, GeneratedRoom room) {
+    static int wage(Difficulty difficulty, GeneratedRoom room, RoomBlueprint blueprint) {
         var spec = room.spec();
         int wage = difficulty.emeralds() + room.sizeCategory().surcharge();
         wage += switch (spec.heights().size()) { case 3 -> 18; case 2 -> 8; default -> 0; };
         wage += patternWage(spec.floor().pattern()) + patternWage(spec.walls().pattern()) + patternWage(spec.ceiling().pattern());
-        for (var window : spec.windows()) {
-            wage += 1 + switch (window.width()) { case 5 -> 4; case 3 -> 2; case 2 -> 1; default -> 0; };
-        }
+        wage += windowWage(blueprint);
         for (var fixture : spec.furniture()) {
             wage += fixture.state().is(Blocks.WHITE_BED) ? 2 : 1;
         }
-        return wage + rarityWage(difficulty.emeralds(), room.blueprint());
+        return wage + rarityWage(difficulty.emeralds(), blueprint);
+    }
+
+    static int windowWage(RoomBlueprint blueprint) {
+        int wage = 0;
+        for (var window : blueprint.windows()) {
+            int size = switch (window.width()) { case 5 -> 4; case 3 -> 2; case 2 -> 1; default -> 0; };
+            int destination = switch (window.destination()) {
+                case COMMON_HALL -> 3;
+                case INTERIOR -> 2;
+                case STREET, COURTYARD, UNSPECIFIED -> 1;
+            };
+            wage += size + destination;
+        }
+        return wage;
     }
 
     private static int patternWage(Pattern pattern) {

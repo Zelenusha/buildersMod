@@ -3,6 +3,8 @@ package io.github.zelenusha.buildersmod.contract;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Criterion;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Status;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Window;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.WindowDestination;
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.HashMap;
@@ -53,6 +55,60 @@ public final class OfferPlacementGameTests {
             level.setBlock(outside, formerOutside, FIXTURE_UPDATE);
             level.setBlock(beyond, formerBeyond, FIXTURE_UPDATE);
         }
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void pricesWindowsByTheVisibleSpaceBeyondEachOpening(GameTestHelper helper) {
+        ServerLevel site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        int y = ConstructionSite.START_FLOOR_Y + 2;
+        BlockPos small = new BlockPos(9, y, 0);
+        var street = new Window(new RoomBlueprint.Bounds(small, small), Direction.EAST, WindowDestination.STREET);
+        var hall = new Window(new RoomBlueprint.Bounds(new BlockPos(5, y, -2), new BlockPos(5, y + 2, 2)),
+                Direction.WEST, WindowDestination.COMMON_HALL);
+        var area = new RoomBlueprint.Bounds(new BlockPos(3, y - 1, -2), new BlockPos(11, y + 2, 2));
+        var bounds = new RoomBlueprint.Bounds(new BlockPos(5, y - 1, -3), new BlockPos(9, y + 3, 3));
+        var interior = new RoomBlueprint.Bounds(new BlockPos(6, y, -2), new BlockPos(8, y + 2, 2));
+        var glass = new RoomBlueprint.Requirement(Blocks.GLASS.defaultBlockState(), Criterion.WINDOWS);
+        Map<BlockPos, RoomBlueprint.Requirement> requirements = new HashMap<>();
+        requirements.put(small, glass);
+        hall.opening().positions().forEach(pane -> requirements.put(pane, glass));
+        var candidate = RoomBlueprint.of(bounds, List.of(interior), requirements,
+                List.of(new RoomBlueprint.Door(new BlockPos(7, y, -3), Direction.NORTH)), Optional.empty(), List.of(street, hall));
+        var account = new ContractData.Account();
+        ContractEvents.withLoadedArea(site, area, () -> {
+            Map<BlockPos, BlockState> original = new HashMap<>();
+            area.positions().forEach(pos -> original.put(pos, site.getBlockState(pos)));
+            try {
+                for (BlockPos pane : hall.opening().positions()) {
+                    site.setBlock(pane.west(), Blocks.GLASS.defaultBlockState(), FIXTURE_UPDATE);
+                    site.setBlock(pane.west(2), Blocks.AIR.defaultBlockState(), FIXTURE_UPDATE);
+                }
+                site.setBlock(small.east(), Blocks.AIR.defaultBlockState(), FIXTURE_UPDATE);
+                helper.assertTrue(OfferFactory.windowDestination(site, account, street, List.of()) == WindowDestination.STREET
+                                && OfferFactory.windowDestination(site, account, hall, List.of()) == WindowDestination.COMMON_HALL,
+                        "An open street window and aligned glazing into the starter hall classify differently");
+                helper.assertTrue(ContractBalance.windowWage(candidate) == 8, "A small street and panoramic hall window add 1 + 7");
+
+                var neighbor = small.east(2);
+                var adjacentBounds = new RoomBlueprint.Bounds(small.east().below(), neighbor.above());
+                var adjacent = RoomBlueprint.of(adjacentBounds, List.of(new RoomBlueprint.Bounds(neighbor, neighbor)),
+                        Map.of(small.east(), glass), List.of(new RoomBlueprint.Door(neighbor, Direction.EAST)), Optional.empty());
+                account.rooms.add(order(neighbor, Direction.EAST, adjacent));
+                site.setBlock(small.east(), Blocks.GLASS.defaultBlockState(), FIXTURE_UPDATE);
+                site.setBlock(neighbor, Blocks.AIR.defaultBlockState(), FIXTURE_UPDATE);
+                var actual = OfferFactory.windowDestination(site, account, street, List.of(adjacentBounds));
+                helper.assertTrue(actual == WindowDestination.INTERIOR
+                                && ContractBalance.windowWage(candidate.withWindows(List.of(street.withDestination(actual), hall))) == 9,
+                        "An ordinary room behind the glass changes the small window's rate to two");
+                site.setBlock(hall.opening().max().west(2), Blocks.STONE.defaultBlockState(), FIXTURE_UPDATE);
+                helper.assertTrue(OfferFactory.windowDestination(site, account, hall, List.of()) == null,
+                        "One covered panoramic tile invalidates the entire opening");
+            } finally {
+                original.forEach((pos, state) -> site.setBlock(pos, state, FIXTURE_UPDATE));
+            }
+            return null;
+        });
         helper.succeed();
     }
 

@@ -5,12 +5,14 @@ import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Criterion;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Door;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Requirement;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Status;
+import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.WindowDestination;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Fixture;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Passage;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Pattern;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Spec;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Surface;
 import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Wall;
+import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Window;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.HashMap;
 import java.util.List;
@@ -190,6 +192,38 @@ public class BlueprintGameTests {
         helper.assertTrue(!next.containsInterior(firstCeiling), "An intermediate ceiling is outside the bonus volume");
         helper.assertTrue(next.requirements().values().stream().anyMatch(RoomBlueprint.Requirement::clearance),
                 "A multi-storey blueprint requires a clear landing");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void preservesWindowOpeningAndDestinationAcrossSaveAndRotation(GameTestHelper helper) {
+        Surface stone = Surface.solid(Blocks.STONE);
+        Spec spec = new Spec(7, 9, List.of(4), stone, stone, stone, Set.of(Wall.OPPOSITE),
+                List.of(new Window(0, Wall.LEFT, 2, 2, 5, 3, Blocks.GLASS_PANE)),
+                List.of(new Fixture(0, new BlockPos(1, 1, 1), Blocks.TORCH.defaultBlockState())),
+                List.of(), Optional.empty());
+        RoomBlueprint original = RectangularRoomBlueprint.at(ANCHOR, Direction.SOUTH, spec);
+        var opening = original.windows().get(0);
+        checkEqual(helper, WindowDestination.UNSPECIFIED, opening.destination());
+        checkEqual(helper, 5, opening.width());
+        checkEqual(helper, 3, opening.height());
+        checkEqual(helper, Direction.WEST, opening.outward());
+        var classified = original.withWindows(List.of(opening.withDestination(WindowDestination.COMMON_HALL)));
+        RoomBlueprint restored = RoomBlueprint.decode(classified.encode());
+        checkEqual(helper, classified.windows(), restored.windows());
+
+        BlockPos nextAnchor = ANCHOR.offset(10, 25, -20);
+        RoomBlueprint rotated = restored.reorient(ANCHOR, Direction.SOUTH, nextAnchor, Direction.WEST);
+        var rebuiltWindow = RectangularRoomBlueprint.at(nextAnchor, Direction.WEST, spec).windows().get(0);
+        checkEqual(helper, List.of(rebuiltWindow.withDestination(WindowDestination.COMMON_HALL)), rotated.windows());
+        checkEqual(helper, Direction.NORTH, rotated.windows().get(0).outward());
+
+        var legacy = original.encode();
+        legacy.putInt("version", 1);
+        legacy.remove("windows");
+        RoomBlueprint oldSave = RoomBlueprint.decode(legacy);
+        checkEqual(helper, List.of(), oldSave.windows());
+        checkEqual(helper, original.requirements(), oldSave.requirements());
         helper.succeed();
     }
 

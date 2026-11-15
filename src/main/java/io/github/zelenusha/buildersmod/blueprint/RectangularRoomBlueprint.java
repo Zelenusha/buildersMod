@@ -175,8 +175,9 @@ public final class RectangularRoomBlueprint {
         }
 
         List<Door> doors = addDoors(local, frame, spec);
+        List<RoomBlueprint.Window> openings = new ArrayList<>();
         for (Window window : spec.windows()) {
-            addWindow(local, window, spec, levels);
+            openings.add(addWindow(local, window, spec, levels, frame));
         }
         if (levels.length > 1) {
             switch (spec.passage()) {
@@ -195,7 +196,8 @@ public final class RectangularRoomBlueprint {
         Map<BlockPos, Requirement> placed = new LinkedHashMap<>();
         local.forEach((position, requirement) -> placed.put(frame.at(position.getX(), position.getY(), position.getZ()),
                 new Requirement(requirement.expectedState().rotate(frame.rotation()), requirement.criterion())));
-        return new RoomBlueprint(bounds(origin, frame.at(farX, top, farZ)), interiors, placed, doors, spec.bonus());
+        return new RoomBlueprint(bounds(origin, frame.at(farX, top, farZ)), interiors, placed, doors, spec.bonus(),
+                openings);
     }
 
     private static void addStorey(Map<BlockPos, Requirement> local, Spec spec, int farX, int farZ, int floor, int top) {
@@ -241,7 +243,8 @@ public final class RectangularRoomBlueprint {
         return doors;
     }
 
-    private static void addWindow(Map<BlockPos, Requirement> local, Window window, Spec spec, int[] levels) {
+    private static RoomBlueprint.Window addWindow(Map<BlockPos, Requirement> local, Window window, Spec spec,
+                                                  int[] levels, Frame frame) {
         int floor = storeyLevel(levels, window.storey());
         if (window.offset() + window.width() - 1 > wallLength(spec, window.wall())
                 || window.bottom() + window.height() - 1 > spec.heights().get(window.storey())) {
@@ -257,6 +260,11 @@ public final class RectangularRoomBlueprint {
                 local.put(position, requirement(window.glass().defaultBlockState(), Criterion.WINDOWS));
             }
         }
+        BlockPos first = wallPosition(spec, window.wall(), window.offset(), floor + window.bottom());
+        BlockPos last = wallPosition(spec, window.wall(), window.offset() + window.width() - 1,
+                floor + window.bottom() + window.height() - 1);
+        return new RoomBlueprint.Window(bounds(frame.at(first), frame.at(last)),
+                frame.rotation().rotate(window.wall().outward), RoomBlueprint.WindowDestination.UNSPECIFIED);
     }
 
     private static int wallLength(Spec spec, Wall wall) {
@@ -434,6 +442,10 @@ public final class RectangularRoomBlueprint {
     }
 
     private record Frame(BlockPos origin, Direction forward) {
+        BlockPos at(BlockPos local) {
+            return at(local.getX(), local.getY(), local.getZ());
+        }
+
         BlockPos at(int x, int y, int z) {
             return origin.relative(forward.getCounterClockWise(), x).above(y).relative(forward, z);
         }

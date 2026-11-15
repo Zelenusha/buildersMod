@@ -2,6 +2,7 @@ package io.github.zelenusha.buildersmod.blueprint;
 
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -150,6 +151,40 @@ public final class RoomBlueprint {
         }
     }
 
+    public enum WindowDestination {
+        UNSPECIFIED,
+        STREET,
+        COURTYARD,
+        INTERIOR,
+        COMMON_HALL
+    }
+
+    public record Window(Bounds opening, Direction outward, WindowDestination destination) {
+        public Window {
+            Objects.requireNonNull(opening, "opening");
+            Objects.requireNonNull(outward, "outward");
+            Objects.requireNonNull(destination, "destination");
+            if (!outward.getAxis().isHorizontal()
+                    || outward.getAxis().choose(opening.min().getX(), 0, opening.min().getZ())
+                    != outward.getAxis().choose(opening.max().getX(), 0, opening.max().getZ())) {
+                throw new IllegalArgumentException("Window must occupy a vertical plane facing outward");
+            }
+        }
+
+        public int width() {
+            return outward.getAxis() == Direction.Axis.X ? opening.max().getZ() - opening.min().getZ() + 1
+                    : opening.max().getX() - opening.min().getX() + 1;
+        }
+
+        public int height() {
+            return opening.max().getY() - opening.min().getY() + 1;
+        }
+
+        public Window withDestination(WindowDestination nextDestination) {
+            return new Window(opening, outward, nextDestination);
+        }
+    }
+
     public record Bounds(BlockPos min, BlockPos max) {
         public Bounds {
             min = min.immutable();
@@ -205,9 +240,15 @@ public final class RoomBlueprint {
     private final Map<BlockPos, Requirement> requirements;
     private final List<Door> doors;
     private final Optional<Bonus> bonus;
+    private final List<Window> windows;
 
     RoomBlueprint(Bounds bounds, List<Bounds> interiorVolumes, Map<BlockPos, Requirement> requirements,
                   List<Door> doors, Optional<Bonus> bonus) {
+        this(bounds, interiorVolumes, requirements, doors, bonus, List.of());
+    }
+
+    RoomBlueprint(Bounds bounds, List<Bounds> interiorVolumes, Map<BlockPos, Requirement> requirements,
+                  List<Door> doors, Optional<Bonus> bonus, List<Window> windows) {
         this.bounds = bounds;
         this.interiorVolumes = List.copyOf(interiorVolumes);
         if (this.interiorVolumes.isEmpty() || requirements.isEmpty() || doors.isEmpty()) {
@@ -217,11 +258,43 @@ public final class RoomBlueprint {
         this.requirements = Collections.unmodifiableMap(new LinkedHashMap<>(requirements));
         this.doors = List.copyOf(doors);
         this.bonus = bonus;
+        this.windows = List.copyOf(windows);
+        validateWindows();
     }
 
     public static RoomBlueprint of(Bounds bounds, List<Bounds> interiorVolumes, Map<BlockPos, Requirement> requirements,
                                    List<Door> doors, Optional<Bonus> bonus) {
         return new RoomBlueprint(bounds, interiorVolumes, requirements, doors, bonus);
+    }
+
+    public static RoomBlueprint of(Bounds bounds, List<Bounds> interiorVolumes, Map<BlockPos, Requirement> requirements,
+                                   List<Door> doors, Optional<Bonus> bonus, List<Window> windows) {
+        return new RoomBlueprint(bounds, interiorVolumes, requirements, doors, bonus, windows);
+    }
+
+    private void validateWindows() {
+        if (windows.isEmpty()) {
+            return;
+        }
+        Set<BlockPos> glazing = new HashSet<>();
+        requirements.forEach((position, requirement) -> {
+            if (requirement.criterion() == Criterion.WINDOWS) {
+                glazing.add(position);
+            }
+        });
+        for (Window window : windows) {
+            if (!bounds.contains(window.opening().min()) || !bounds.contains(window.opening().max())) {
+                throw new IllegalArgumentException("Window falls outside the room");
+            }
+            for (BlockPos position : window.opening().positions()) {
+                if (!glazing.remove(position)) {
+                    throw new IllegalArgumentException("Invalid or duplicate window position: " + position);
+                }
+            }
+        }
+        if (!glazing.isEmpty()) {
+            throw new IllegalArgumentException("Glazing is missing window geometry");
+        }
     }
 
     private static Bounds encompassing(List<Bounds> volumes) {
@@ -270,6 +343,14 @@ public final class RoomBlueprint {
         return bonus;
     }
 
+    public List<Window> windows() {
+        return windows;
+    }
+
+    public RoomBlueprint withWindows(List<Window> nextWindows) {
+        return new RoomBlueprint(bounds, interiorVolumes, requirements, doors, bonus, nextWindows);
+    }
+
     public CompoundTag encode() {
         return BlueprintTag.write(this);
     }
@@ -294,7 +375,12 @@ public final class RoomBlueprint {
         List<Bounds> interiors = interiorVolumes.stream().map(volume -> transformBounds(volume, transform)).toList();
         List<Door> transformedDoors = doors.stream().map(door -> new Door(transform.apply(door.lowerPosition()),
                 rotation.rotate(door.outward()))).toList();
-        return new RoomBlueprint(transformBounds(bounds, transform), interiors, transformed, transformedDoors, bonus);
+        List<Window> transformedWindows = windows.stream()
+                .map(window -> new Window(transformBounds(window.opening(), transform), rotation.rotate(window.outward()),
+                        window.destination()))
+                .toList();
+        return new RoomBlueprint(transformBounds(bounds, transform), interiors, transformed, transformedDoors, bonus,
+                transformedWindows);
     }
 
     private static Bounds transformBounds(Bounds bounds, Function<BlockPos, BlockPos> transform) {
