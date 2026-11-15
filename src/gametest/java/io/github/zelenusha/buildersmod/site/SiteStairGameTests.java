@@ -40,6 +40,8 @@ public class SiteStairGameTests {
             checkEqual(helper, 25L, route.stream().filter(pos -> isStair(blueprint, pos)).count());
             checkEqual(helper, LOWER, route.get(0).getY());
             checkEqual(helper, UPPER, route.get(route.size() - 1).getY());
+            checkEqual(helper, 0, route.get(0).getX());
+            checkEqual(helper, 2, Math.abs(route.get(route.size() - 1).getZ()));
             for (int index = 0; index < route.size(); index++) {
                 BlockPos pos = route.get(index);
                 helper.assertTrue(blueprint.requirements().get(pos.above()).clearance(), "First headroom block must be clear");

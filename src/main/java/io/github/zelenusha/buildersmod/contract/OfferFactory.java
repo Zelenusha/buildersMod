@@ -160,7 +160,7 @@ final class OfferFactory {
         if (account.special != null) {
             return canResume(site, account.special) ? account.special : null;
         }
-        ContractData.Accepted corridor = account.highestFloor > 1 ? corridor(site, account) : null;
+        ContractData.Accepted corridor = corridor(site, account);
         return corridor != null ? corridor : stairs(site, account);
     }
 

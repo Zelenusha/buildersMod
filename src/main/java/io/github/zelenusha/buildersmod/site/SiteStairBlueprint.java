@@ -209,8 +209,11 @@ public final class SiteStairBlueprint {
         // Each flight climbs five bottom-half stairs and meets a full-block landing at the final tread's level.
         int z = -INNER_EDGE * start.getStepZ();
         BlockPos approach = new BlockPos(WEST_LANE + 1, lowerFloorY, z);
-        addTread(requirements, approach, lowerFooting);
-        clearHeadroom(requirements, approach);
+        for (int offset = 2; offset >= 0; offset--) {
+            BlockPos connector = approach.east(offset);
+            addTread(requirements, connector, lowerFooting);
+            clearHeadroom(requirements, connector);
+        }
         BlockPos tread = approach.west();
         addTread(requirements, tread, lowerFooting);
         clearHeadroom(requirements, tread);
@@ -235,6 +238,10 @@ public final class SiteStairBlueprint {
                 clearHeadroom(requirements, tread);
                 flight = flight.getOpposite();
             }
+        }
+        for (BlockPos connector : List.of(tread.east(), tread.east().relative(flight.getOpposite()))) {
+            addTread(requirements, connector, materials.roomFloor());
+            clearHeadroom(requirements, connector);
         }
     }
 
