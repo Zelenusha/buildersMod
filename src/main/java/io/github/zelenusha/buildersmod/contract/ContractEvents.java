@@ -555,6 +555,11 @@ public final class ContractEvents {
     }
 
     private static void show(ServerPlayer player, UUID foreman, boolean dialogue, String feedback) {
+        ContractNetwork.sendPanel(player, panel(player, foreman, dialogue, feedback));
+    }
+
+    /** The foreman's dialogue or order list as the client receives it. */
+    static ContractNetwork.Panel panel(ServerPlayer player, UUID foreman, boolean dialogue, String feedback) {
         ContractData data = ContractData.get(player.server);
         ContractData.Account account = data.account(player.getUUID());
         ContractData.Accepted order = account.active;
@@ -622,10 +627,10 @@ public final class ContractEvents {
             }
             cards.sort(java.util.Comparator.comparingInt(card -> card.slot() < 0 ? Integer.MAX_VALUE : card.slot()));
         }
-        ContractNetwork.sendPanel(player, new ContractNetwork.Panel(foreman, dialogue, state, account.unpaid,
+        return new ContractNetwork.Panel(foreman, dialogue, state, account.unpaid,
                 account.completed, cards, account.failed.size(), account.fines.entries().size(), feedback, account.lastCall,
                 account.incidents.stream().filter(work -> work.kind().pausesConstruction() && account.pausedAt >= 0)
-                        .map(work -> work.kind().title).findFirst().orElse("")));
+                        .map(work -> work.kind().title).findFirst().orElse(""));
     }
 
     private static ContractNetwork.Card incidentCard(int slot, IncidentState.Kind kind, ContractBalance.Difficulty level,

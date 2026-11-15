@@ -582,7 +582,10 @@ public final class ClientWalkthrough {
                 && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FIRE) == null, panel().feedback()));
         press("", "Забрать зарплату");
 
-        // FR-34, FR-178: eviction
+        // FR-34, FR-43, FR-140, FR-178: eviction beside a room in progress
+        long[] frozen = new long[1];
+        card("2");
+        press("вторая комната принята в работу", "Принять заказ");
         run("", () -> onServer(() -> {
             ContractFixtures.offerIncident(serverPlayer(), IncidentState.Kind.EVICTION);
             return null;
@@ -593,6 +596,11 @@ public final class ClientWalkthrough {
         card("4");
         shot("eviction-offer");
         press("выселение принято у прораба", "Принять заказ");
+        run("выселение, взятое у прораба, ставит комнату на паузу", () -> {
+            check(ContractFixtures.paused(serverPlayer()) && panel().pauseReason().equals("Выселение"),
+                    "Причина паузы: " + panel().pauseReason());
+            frozen[0] = panel().cards().stream().filter(entry -> entry.slot() == 1).findFirst().orElseThrow().remaining();
+        });
         run("на первом уровне одна цель выселения", () -> {
             var targets = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION).remainingEvictionTargets();
             check(targets.size() == 1, "Целей: " + targets.size());
@@ -627,8 +635,18 @@ public final class ClientWalkthrough {
         run("гибель игрока проваливает выселение без оплаты, жилец остаётся", () -> {
             check(ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION) == null
                     && ContractFixtures.unpaid(serverPlayer()) == unpaid[0], "Задание снято, зарплаты нет");
-            check(onServer(() -> ContractFixtures.account(serverPlayer())) != null, "Счёт игрока на месте");
+            check(!ContractFixtures.paused(serverPlayer()) && ContractFixtures.activeBlueprint(serverPlayer()) != null,
+                    "Комната в работе сохранилась, пауза снята");
         });
+        openForeman();
+        press("", "Открыть заказы");
+        run("после гибели заказ на комнату идёт с прежнего остатка срока", () -> {
+            long remaining = panel().cards().stream().filter(entry -> entry.slot() == 1).findFirst().orElseThrow().remaining();
+            check(panel().pauseReason().isEmpty() && remaining <= frozen[0] && frozen[0] - remaining < 1200,
+                    "Остаток " + remaining + " при замороженном " + frozen[0]);
+        });
+        shot("room-resumed-after-death");
+        closeScreen();
         run("", () -> onServer(() -> {
             ContractFixtures.offerIncident(serverPlayer(), IncidentState.Kind.EVICTION);
             return null;
@@ -1326,9 +1344,32 @@ public final class ClientWalkthrough {
             ServerLevel site = server().getLevel(ConstructionSite.SITE_LEVEL);
             room.requirements().forEach((pos, requirement) -> site.setBlock(pos, requirement.expectedState(), PLACE));
             site.setBlock(room.interior().min().offset(2, 0, 3), Blocks.CAKE.defaultBlockState(), PLACE);
+            site.setBlock(room.interior().min().offset(3, 0, 3), Blocks.CAKE.defaultBlockState(), PLACE);
+            return null;
+        }));
+        closeScreen();
+        openForeman();
+        press("", "Открыть заказы");
+        run("с четвёртым тортом счётчик показывает 4 при цели 3, факелы 2 / 2", () -> {
+            var card = panel().cards().get(0);
+            check(placed(card, "block.minecraft.torch") == 2 && needed(card, "block.minecraft.torch") == 2
+                    && placed(card, "block.minecraft.oak_door") == 4 && card.missing() == 0, "Обязательные материалы выполнены");
+            check(card.bonusFound() == 4 && card.bonusTarget() == 3, "Торты " + card.bonusFound() + " / " + card.bonusTarget());
+        });
+        shot("card-four-cakes");
+        run("лишний торт убран", () -> onServer(() -> {
+            ServerPlayer player = serverPlayer();
+            RoomBlueprint room = ContractFixtures.activeBlueprint(player);
+            server().getLevel(ConstructionSite.SITE_LEVEL).removeBlock(room.interior().min().offset(3, 0, 3), false);
             player.getRandom().setSeed(1L);
             return null;
         }));
+        closeScreen();
+        openForeman();
+        press("", "Открыть заказы");
+        run("с тремя тортами условие бонуса снова выполнено", () -> check(panel().cards().get(0).bonusFound() == 3,
+                "Торты 3 / 3"));
+        shot("card-three-cakes");
         press("", "Сдать");
         run("комната зачтена, начислены база, бонус за торты и досрочные сутки", () -> {
             check(panel().feedback().startsWith("Постройка принята"), "Прораб принял комнату: " + panel().feedback());

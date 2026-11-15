@@ -86,6 +86,25 @@ public final class ContractBalance {
         return Math.min(base / 2, bonus);
     }
 
+    /** The remainder of a deadline in game days as the timer shows it (FR-111): "0,25 дня", "1 день", "5 дней". */
+    public static String daysText(long ticks) {
+        if (ticks <= 0) {
+            return "0 дней";
+        }
+        java.math.BigDecimal value = java.math.BigDecimal.valueOf(ticks)
+                .divide(java.math.BigDecimal.valueOf(TICKS_PER_DAY), 2, java.math.RoundingMode.HALF_UP).stripTrailingZeros();
+        if (value.signum() == 0) {
+            return "<0,01 дня";
+        }
+        String unit = "дня";
+        if (value.scale() <= 0) {
+            int whole = value.intValueExact();
+            unit = whole % 10 == 1 && whole % 100 != 11 ? "день"
+                    : whole % 10 >= 2 && whole % 10 <= 4 && (whole % 100 < 12 || whole % 100 > 14) ? "дня" : "дней";
+        }
+        return value.toPlainString().replace('.', ',') + " " + unit;
+    }
+
     public static int earlyBonus(long remainingTicks, boolean boughtExtraDay) {
         return remainingTicks > 0 && !boughtExtraDay ? (int) ((remainingTicks - 1) / TICKS_PER_DAY + 1) : 0;
     }

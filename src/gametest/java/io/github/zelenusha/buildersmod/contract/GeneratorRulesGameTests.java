@@ -178,6 +178,132 @@ public class GeneratorRulesGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = "empty")
+    public static void surchargesAddUpForSizeStoreysPatternsAndFurniture(GameTestHelper helper) {
+        Surface stone = Surface.solid(Blocks.STONE);
+        List<Fixture> light = List.of(new Fixture(0, new BlockPos(2, 1, 2), Blocks.TORCH.defaultBlockState()));
+        int plain = wage(spec(List.of()), SizeCategory.TINY);
+        int[] bySize = {0, 3, 7, 15, 25};
+        for (SizeCategory size : SizeCategory.values()) {
+            helper.assertTrue(wage(spec(List.of()), size) - plain == bySize[size.ordinal()], "Size surcharge of " + size);
+        }
+        Spec two = new Spec(9, 9, List.of(4, 4), stone, stone, stone, Set.of(Wall.OPPOSITE), List.of(), light, List.of(),
+                Optional.empty());
+        Spec three = new Spec(9, 9, List.of(4, 7, 10), stone, stone, stone, Set.of(Wall.OPPOSITE), List.of(), light, List.of(),
+                Optional.empty());
+        helper.assertTrue(wage(two, SizeCategory.TINY) - plain == 8 && wage(three, SizeCategory.TINY) - plain == 18,
+                "Two and three own storeys add 8 and 18");
+        Surface checkered = new Surface(Blocks.STONE.defaultBlockState(), RectangularRoomBlueprint.Pattern.CHECKERBOARD,
+                Optional.of(Blocks.COBBLESTONE.defaultBlockState()));
+        Surface striped = new Surface(Blocks.STONE.defaultBlockState(), RectangularRoomBlueprint.Pattern.STRIPES,
+                Optional.of(Blocks.ANDESITE.defaultBlockState()));
+        Spec patterned = new Spec(9, 9, List.of(4), striped, checkered, stone, Set.of(Wall.OPPOSITE), List.of(), light, List.of(),
+                Optional.empty());
+        helper.assertTrue(wage(patterned, SizeCategory.TINY) - plain == 5, "Checkered walls and a striped floor add 3 + 2");
+        Fixture furnace = new Fixture(0, new BlockPos(4, 1, 4), Blocks.FURNACE.defaultBlockState());
+        Fixture secondFurnace = new Fixture(0, new BlockPos(6, 1, 4), Blocks.FURNACE.defaultBlockState());
+        Fixture bed = new Fixture(0, new BlockPos(6, 1, 6), Blocks.WHITE_BED.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH));
+        helper.assertTrue(wage(furnished(furnace, secondFurnace), SizeCategory.TINY) - plain == 2
+                && wage(furnished(furnace, bed), SizeCategory.TINY) - plain == 3,
+                "A furnace adds 1 each and a bed 2 although it takes two blocks");
+        helper.assertTrue(rejects(() -> new Spec(9, 9, List.of(4, 4, 4, 4), stone, stone, stone, Set.of(Wall.OPPOSITE), List.of(),
+                light, List.of(), Optional.empty())), "Four own storeys are rejected");
+        helper.assertTrue(rejects(() -> new Spec(9, 9, List.of(3), stone, stone, stone, Set.of(Wall.OPPOSITE), List.of(), light,
+                List.of(), Optional.empty())) && rejects(() -> new Spec(9, 9, List.of(4, 11), stone, stone, stone,
+                Set.of(Wall.OPPOSITE), List.of(), light, List.of(), Optional.empty())), "A storey must be 4 to 10 blocks high");
+        helper.assertTrue(rejects(() -> new Spec(9, 9, List.of(4), stone, stone, stone, Set.of(), List.of(), light, List.of(),
+                Optional.empty())), "A room needs at least one extra doorway");
+
+        int[][] square = {{5, 5}, {7, 7}, {9, 9}, {11, 11}, {15, 15}};
+        int[][] oblong = {{5, 7}, {7, 9}, {9, 11}, {13, 11}, {17, 15}};
+        for (int level = 1; level <= 5; level++) {
+            for (long seed = 0; seed < 40; seed++) {
+                RoomGenerator.generate(RandomSource.create(seed), level, ANCHOR, Direction.NORTH, block -> true).ifPresent(room -> {
+                    int size = room.sizeCategory().ordinal();
+                    int width = room.spec().width();
+                    int depth = room.spec().depth();
+                    helper.assertTrue(width == square[size][0] && depth == square[size][1]
+                            || width == oblong[size][0] && depth == oblong[size][1], "Footprint of " + room.sizeCategory());
+                    helper.assertTrue(!room.spec().extraDoors().isEmpty() && room.spec().extraDoors().size() <= 3
+                            && !room.spec().lights().isEmpty(), "Every room has one to three extra doorways and light");
+                });
+            }
+        }
+        helper.succeed();
+    }
+
+    private static Spec furnished(Fixture... furniture) {
+        Surface stone = Surface.solid(Blocks.STONE);
+        return new Spec(9, 9, List.of(4), stone, stone, stone, Set.of(Wall.OPPOSITE), List.of(),
+                List.of(new Fixture(0, new BlockPos(2, 1, 2), Blocks.TORCH.defaultBlockState())), List.of(furniture),
+                Optional.empty());
+    }
+
+    private static boolean rejects(Runnable construction) {
+        try {
+            construction.run();
+            return false;
+        } catch (IllegalArgumentException expected) {
+            return true;
+        }
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void tallRoomCrossesOnlyAnOpenAndFreeUpperDeck(GameTestHelper helper) {
+        ServerLevel site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        Surface stone = Surface.solid(Blocks.STONE);
+        RoomBlueprint tall = RectangularRoomBlueprint.at(ANCHOR, Direction.NORTH, new Spec(9, 9, List.of(10, 10, 10), stone, stone,
+                stone, Set.of(Wall.OPPOSITE), List.of(), List.of(new Fixture(0, new BlockPos(2, 1, 2),
+                Blocks.TORCH.defaultBlockState())), List.of(), Optional.empty()));
+        int upperDeck = ConstructionSite.START_FLOOR_Y + ConstructionSite.FLOOR_STEP;
+        BlockPos inside = new BlockPos(ANCHOR.getX(), upperDeck, ANCHOR.getZ() - 5);
+        helper.assertTrue(tall.containsInterior(inside) && tall.bounds().max().getY() > upperDeck,
+                "The third storey passes through the deck of the second floor");
+        ContractEvents.withLoadedArea(site, tall.bounds(), () -> {
+            helper.assertTrue(OfferFactory.scan(site, tall, List.of(), 1) == null, "A closed floor rejects the tall room");
+            var placement = OfferFactory.scan(site, tall, List.of(), 2);
+            helper.assertTrue(placement != null && placement.blueprint().requirements().get(inside).clearance()
+                    && placement.originals().get(inside).is(Blocks.STONE), "On an open floor the deck inside is marked for clearing");
+            helper.assertTrue(placement.blueprint().checkPosition(site, inside) == RoomBlueprint.Status.WRONG,
+                    "A deck block left inside fails the check");
+            helper.assertTrue(OfferFactory.scan(site, tall, List.of(new Bounds(inside.above(), inside.above(3))), 2) == null,
+                    "A plot taken on the upper floor rejects the tall room");
+            return null;
+        });
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void columnsAndPlayerBlocksAreClearedByHandAndContainersReject(GameTestHelper helper) {
+        ServerLevel site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        RoomBlueprint room = RectangularRoomBlueprint.at(ANCHOR, Direction.NORTH, spec(List.of()));
+        BlockPos column = new BlockPos(296, ConstructionSite.START_FLOOR_Y + 2, 296);
+        BlockPos columnInWall = new BlockPos(295, ConstructionSite.START_FLOOR_Y + 2, 296);
+        BlockPos placed = new BlockPos(300, ConstructionSite.START_FLOOR_Y + 1, 294);
+        ContractEvents.withLoadedArea(site, room.bounds(), () -> {
+            helper.assertTrue(site.getBlockState(column).is(Blocks.STONE_BRICKS) && room.containsInterior(column)
+                    && room.requirements().get(columnInWall).criterion() == RoomBlueprint.Criterion.WALLS,
+                    "A frame column stands inside the future room and in its wall");
+            site.setBlock(placed, Blocks.COBBLESTONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+            try {
+                var placement = OfferFactory.scan(site, room, List.of(), 1);
+                helper.assertTrue(placement != null, "The column and the player's block do not reject the room");
+                helper.assertTrue(placement.blueprint().requirements().get(column).clearance()
+                        && placement.blueprint().requirements().get(placed).clearance(),
+                        "Blocks inside the room are marked for manual clearing");
+                helper.assertTrue(placement.blueprint().checkPosition(site, columnInWall) == RoomBlueprint.Status.WRONG
+                        && placement.originals().containsKey(columnInWall), "A column block in the wall is a mismatch to replace");
+                site.setBlock(placed, Blocks.CHEST.defaultBlockState(), Block.UPDATE_CLIENTS);
+                helper.assertTrue(OfferFactory.scan(site, room, List.of(), 1) == null, "A container, even empty, rejects the room");
+            } finally {
+                site.setBlock(placed, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+            return null;
+        });
+        helper.succeed();
+    }
+
     /** A row of 100 mandatory blocks: stone, two second-tier materials and diamond. */
     private static RoomBlueprint strip(int stone, int deepslate, int cherry, int diamond) {
         Map<BlockPos, RoomBlueprint.Requirement> blocks = new java.util.LinkedHashMap<>();
@@ -201,9 +327,11 @@ public class GeneratorRulesGameTests {
     }
 
     private static int wage(List<Window> windows) {
-        Spec spec = spec(windows);
+        return wage(spec(windows), SizeCategory.MEDIUM);
+    }
+
+    private static int wage(Spec spec, SizeCategory size) {
         return ContractBalance.wage(ContractBalance.Difficulty.TWO, new GeneratedRoom(
-                RectangularRoomBlueprint.at(ANCHOR, Direction.NORTH, spec), SizeCategory.MEDIUM, 2, spec,
-                Category.LIVING, Style.ECLECTIC));
+                RectangularRoomBlueprint.at(ANCHOR, Direction.NORTH, spec), size, 2, spec, Category.LIVING, Style.ECLECTIC));
     }
 }

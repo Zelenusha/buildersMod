@@ -8,8 +8,6 @@ import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.contract.ContractBalance;
 import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -95,21 +93,7 @@ public final class ContractClient {
     }
 
     static String days(long ticks) {
-        if (ticks <= 0) {
-            return "0 дней";
-        }
-        BigDecimal value = BigDecimal.valueOf(ticks)
-                .divide(BigDecimal.valueOf(ContractBalance.TICKS_PER_DAY), 2, RoundingMode.HALF_UP).stripTrailingZeros();
-        if (value.signum() == 0) {
-            return "<0,01 дня";
-        }
-        String unit = "дня";
-        if (value.scale() <= 0) {
-            int whole = value.intValueExact();
-            unit = whole % 10 == 1 && whole % 100 != 11 ? "день"
-                    : whole % 10 >= 2 && whole % 10 <= 4 && (whole % 100 < 12 || whole % 100 > 14) ? "дня" : "дней";
-        }
-        return value.toPlainString().replace('.', ',') + " " + unit;
+        return ContractBalance.daysText(ticks);
     }
 
     @SubscribeEvent
