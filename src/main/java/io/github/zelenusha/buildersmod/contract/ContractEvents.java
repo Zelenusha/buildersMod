@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -189,7 +190,7 @@ public final class ContractEvents {
         return "Постройка принята. Зарплату можно забрать.";
     }
 
-    private static String cancel(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String cancel(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
         if (order == null) {
             return "Нет активной постройки.";
@@ -203,7 +204,11 @@ public final class ContractEvents {
         return "Заказ отменён. Штраф: " + fine + " изумрудов.";
     }
 
-    private static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
+        return checkDeadline(player, data, account, text -> ContractNetwork.call(player, text));
+    }
+
+    static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account, Consumer<String> call) {
         ContractData.Accepted order = account.active;
         if (order == null || account.pausedAt >= 0 || order.deadline() > data.time(player.server)
                 || account.stairInspection != ContractData.StairInspection.WAITING) {
@@ -228,7 +233,7 @@ public final class ContractEvents {
             data.setDirty();
             account.lastCall = "Опять недострой. Штраф " + fine + " изумрудов. Даю ещё "
                     + order.difficulty().duration() / ContractBalance.TICKS_PER_DAY + " дн. на тот же заказ.";
-            ContractNetwork.call(player, account.lastCall);
+            call.accept(account.lastCall);
         } else {
             fail(data, account, order, ContractBalance.incompleteFine(check.mismatchCount(), check.violatedCriteriaCount()),
                     "Недострой в срок", fineAudacity(player, 0, 0));
@@ -406,7 +411,7 @@ public final class ContractEvents {
         return account.unpaid == 0 ? "Начислений к выдаче нет." : "Освободи место в инвентаре.";
     }
 
-    private static String buyTime(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String buyTime(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
         if (order == null || !canBuyTime(account)) {
             return "Дополнительные сутки недоступны.";

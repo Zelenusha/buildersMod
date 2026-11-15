@@ -10,6 +10,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -128,6 +129,61 @@ public class DemolitionGameTests {
             account.failed.clear();
         }
         helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void expirationAndCancellationCreateIndependentDemolitions(GameTestHelper helper) {
+        var server = helper.getLevel().getServer();
+        ServerLevel site = server.getLevel(ConstructionSite.SITE_LEVEL);
+        var player = FakePlayerFactory.get(helper.getLevel(), new GameProfile(UUID.randomUUID(), "deadline-cancel"));
+        var data = new ContractData();
+        var account = data.account(player.getUUID());
+        long now = data.time(server);
+        var expired = placeRoom(site, new BlockPos(413, ConstructionSite.START_FLOOR_Y + 1, 295), now, 0);
+        var cancelled = placeRoom(site, expired.anchor().east(32), now + ContractBalance.TICKS_PER_DAY, 1);
+        helper.assertTrue(expired.blueprint().check(site).complete() && cancelled.blueprint().check(site).complete(),
+                "The test starts with two complete physical rooms");
+        expired.blueprint().requirements().entrySet().stream()
+                .filter(entry -> entry.getValue().criterion() == RoomBlueprint.Criterion.WALLS)
+                .filter(entry -> entry.getKey().getY() > expired.anchor().getY())
+                .limit(11).forEach(entry -> site.removeBlock(entry.getKey(), false));
+        account.offers[0] = expired;
+        account.offers[1] = cancelled;
+        account.active = expired;
+
+        helper.assertTrue(ContractEvents.checkDeadline(player, data, account), "The deadline checks the room from the Overworld");
+        helper.assertTrue(account.active == null && account.offers[0] == null && account.offers[1] == cancelled,
+                "Failure releases the building slot and only removes the failed offer");
+        helper.assertTrue(account.failed.size() == 1 && account.failed.get(0).order().equals(expired),
+                "The incomplete room becomes a demolition task");
+        helper.assertTrue(account.fines.entries().size() == 1 && account.fines.entries().get(0).amount() == 4,
+                "Eleven missing positions in one criterion incur four emeralds");
+        helper.assertTrue(!ContractEvents.checkDeadline(player, data, account), "Repeating the expiry cannot process the old order");
+
+        account.active = cancelled;
+        ContractEvents.cancel(player, data, account);
+        ContractEvents.cancel(player, data, account);
+        helper.assertTrue(account.active == null && account.failed.size() == 2 && account.fines.entries().size() == 2,
+                "Cancellation adds one demolition and one fine alongside the earlier ones");
+        helper.assertTrue(account.failed.get(1).order().equals(cancelled) && account.fines.entries().get(1).amount() == 3,
+                "Cancelling a finished room before its deadline incurs the fixed fine");
+        helper.assertTrue(account.completed == 0 && account.unpaid == 0, "Neither failure creates a successful completion or salary");
+
+        var restored = ContractData.load(data.save(new CompoundTag())).account(player.getUUID());
+        helper.assertTrue(restored.failed.stream().map(DemolitionWork::id).toList()
+                        .equals(account.failed.stream().map(DemolitionWork::id).toList()),
+                "Both demolition assignments keep their independent IDs across reload");
+        helper.assertTrue(restored.fines.entries().equals(account.fines.entries()), "The two separate fines survive reload");
+        helper.succeed();
+    }
+
+    private static ContractData.Accepted placeRoom(ServerLevel site, BlockPos anchor, long deadline, int slot) {
+        RoomBlueprint blueprint = SampleRoomBlueprint.at(anchor, Direction.NORTH);
+        Map<BlockPos, BlockState> baseline = DemolitionWork.snapshot(site, blueprint);
+        blueprint.requirements().forEach((position, requirement) ->
+                site.setBlock(position, requirement.expectedState(), Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE));
+        return new ContractData.Accepted(anchor, Direction.NORTH, ContractBalance.Difficulty.ONE, deadline, false,
+                blueprint, 5, ContractData.Kind.ROOM, slot, 0, baseline);
     }
 
     private static ContractData.Accepted order(BlockPos anchor, RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) {
