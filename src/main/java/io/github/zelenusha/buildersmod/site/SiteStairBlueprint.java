@@ -17,6 +17,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.LadderBlock;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.WallTorchBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -24,7 +25,7 @@ import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.level.block.state.properties.StairsShape;
 
-/** A sequence of stair flights along the west side of the starter room and a shell on the next deck. */
+/** A climb along the west side of the starter room and a shell on the next deck. */
 public final class SiteStairBlueprint {
     private static final int OUTER_EDGE = 4;
     private static final int INNER_EDGE = OUTER_EDGE - 1;
@@ -34,6 +35,7 @@ public final class SiteStairBlueprint {
     private static final int STEPS_PER_FLIGHT = ConstructionSite.FLOOR_STEP / FLIGHTS;
 
     public enum Layout {
+        STRAIGHT(Direction.UP),
         NORTH_FIRST(Direction.NORTH),
         SOUTH_FIRST(Direction.SOUTH);
 
@@ -93,6 +95,11 @@ public final class SiteStairBlueprint {
     }
 
     public static RoomBlueprint create(int lowerFloorY, Layout layout, Materials materials, BlockState lowerFooting) {
+        return create(lowerFloorY, layout, materials, lowerFooting, pos -> Blocks.STONE_BRICKS.defaultBlockState());
+    }
+
+    private static RoomBlueprint create(int lowerFloorY, Layout layout, Materials materials, BlockState lowerFooting,
+                                        Function<BlockPos, BlockState> blocks) {
         checkLowerDeck(lowerFloorY);
         Objects.requireNonNull(layout, "layout");
         Objects.requireNonNull(materials, "materials");
@@ -102,7 +109,11 @@ public final class SiteStairBlueprint {
         int upperFloorY = lowerFloorY + ConstructionSite.FLOOR_STEP;
         List<ConstructionSite.SiteDoor> upperDoors = upperDoors(upperFloorY);
         Map<BlockPos, Requirement> requirements = new LinkedHashMap<>();
-        addStairs(requirements, lowerFloorY, layout.start, materials, lowerFooting);
+        if (layout == Layout.STRAIGHT) {
+            addLadder(requirements, lowerFloorY, materials, lowerFooting, blocks);
+        } else {
+            addStairs(requirements, lowerFloorY, layout.start, materials, lowerFooting);
+        }
         addUpperShell(requirements, upperFloorY, upperDoors, materials);
 
         Bounds bounds = new Bounds(new BlockPos(-OUTER_EDGE, lowerFloorY, -OUTER_EDGE),
@@ -120,7 +131,7 @@ public final class SiteStairBlueprint {
             return Optional.empty();
         }
         for (Layout layout : Layout.values()) {
-            RoomBlueprint candidate = create(lowerFloorY, layout, materials, lowerFooting);
+            RoomBlueprint candidate = create(lowerFloorY, layout, materials, lowerFooting, blocks);
             if (candidate.requirements().entrySet().stream().allMatch(entry ->
                     matchesOrCanReplace(lowerFloorY, entry, lowerCeiling, blocks))) {
                 return Optional.of(candidate);
@@ -242,6 +253,43 @@ public final class SiteStairBlueprint {
         for (BlockPos connector : List.of(tread.east(), tread.east().relative(flight.getOpposite()))) {
             addTread(requirements, connector, materials.roomFloor());
             clearHeadroom(requirements, connector);
+        }
+    }
+
+    private static void addLadder(Map<BlockPos, Requirement> requirements, int lowerFloorY, Materials materials,
+                                  BlockState lowerFooting, Function<BlockPos, BlockState> blocks) {
+        int upperY = lowerFloorY + ConstructionSite.FLOOR_STEP;
+        BlockPos shaft = new BlockPos(WEST_LANE, lowerFloorY, 0);
+        BlockState ladder = Blocks.LADDER.defaultBlockState().setValue(LadderBlock.FACING, Direction.EAST);
+        for (int y = lowerFloorY + 1; y <= upperY + 2; y++) {
+            BlockPos rung = shaft.atY(y);
+            addTread(requirements, rung, ladder);
+            BlockPos backing = rung.west();
+            BlockState support;
+            if (y > upperY) {
+                support = materials.roomWalls();
+            } else if (y == upperY) {
+                support = materials.roomFloor();
+            } else if (y < lowerFloorY + ROOM_CEILING_OFFSET) {
+                BlockState wall = blocks.apply(backing);
+                support = !wall.hasBlockEntity() && wall.isCollisionShapeFullBlock(EmptyBlockGetter.INSTANCE, backing)
+                        ? wall : materials.landings();
+            } else {
+                support = materials.landings();
+            }
+            addTread(requirements, backing, support);
+        }
+        // Cut out the two slabs beside the rung path and keep an intact landing to its east at both ends.
+        Requirement air = new Requirement(Blocks.AIR.defaultBlockState(), Criterion.CLEARANCE);
+        requirements.put(shaft.north().above(ROOM_CEILING_OFFSET), air);
+        requirements.put(shaft.north().atY(upperY), air);
+        for (int east = 1; east <= 2; east++) {
+            BlockPos approach = shaft.east(east);
+            addTread(requirements, approach, lowerFooting);
+            clearHeadroom(requirements, approach);
+            BlockPos landing = approach.atY(upperY);
+            addTread(requirements, landing, materials.roomFloor());
+            clearHeadroom(requirements, landing);
         }
     }
 

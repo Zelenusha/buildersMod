@@ -19,6 +19,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LadderBlock;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.util.FakePlayer;
@@ -217,7 +218,8 @@ public final class StairContractGameTests {
 
     private static BlockPos step(RoomBlueprint blueprint) {
         return blueprint.requirements().entrySet().stream()
-                .filter(entry -> entry.getValue().expectedState().getBlock() instanceof StairBlock)
+                .filter(entry -> entry.getValue().expectedState().getBlock() instanceof StairBlock
+                        || entry.getValue().expectedState().getBlock() instanceof LadderBlock)
                 .findFirst().orElseThrow().getKey();
     }
 
