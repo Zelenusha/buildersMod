@@ -88,3 +88,21 @@ jar.finalizedBy('reobfJar')
 tasks.matching { it.name == 'runGameTestServer' }.configureEach {
     doFirst { delete file('run-tests/world') }
 }
+
+// The release classes together with the scripted client scenarios. It is not a release artifact: it lets the
+// reobfuscated code be played through in an installed Forge client (see scripts/packaged_client.py).
+tasks.register('walkthroughJar', Jar) {
+    archiveClassifier = 'walkthrough'
+    from sourceSets.main.output
+    from sourceSets.gametest.output
+    finalizedBy 'reobfWalkthroughJar'
+}
+reobf {
+    walkthroughJar { }
+}
+
+// The same sources always give the same JAR bytes.
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
