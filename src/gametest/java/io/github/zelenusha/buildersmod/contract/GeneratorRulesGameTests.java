@@ -133,6 +133,67 @@ public class GeneratorRulesGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = "empty")
+    public static void levelOddsStepWithEveryFifthRoomUntilTheHundredth(GameTestHelper helper) {
+        int draws = 400_000;
+        double[] start = {0.85, 0.12, 0.025, 0.0045, 0.0005};
+        double[] end = {0.10, 0.15, 0.25, 0.30, 0.20};
+        for (int completed : new int[] {0, 4, 5, 99, 100, 101}) {
+            int step = Math.min(20, completed / 5);
+            int[] seen = new int[5];
+            RandomSource random = RandomSource.create(completed);
+            for (int draw = 0; draw < draws; draw++) {
+                seen[ContractBalance.selectDifficulty(random, completed).ordinal()]++;
+            }
+            for (int level = 0; level < 5; level++) {
+                double expected = ((20 - step) * start[level] + step * end[level]) / 20;
+                helper.assertTrue(Math.abs(seen[level] / (double) draws - expected) < 0.004,
+                        "Level " + (level + 1) + " odds after " + completed + " rooms");
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void zeroWeightsExcludeStoreysOnLevelOneAndTinyRoomsOnLevelFive(GameTestHelper helper) {
+        for (long seed = 0; seed < 150; seed++) {
+            RoomGenerator.generate(RandomSource.create(seed), 1, ANCHOR, Direction.NORTH, block -> true).ifPresent(room ->
+                    helper.assertTrue(room.spec().heights().size() == 1, "Level 1 rooms have one storey"));
+            RoomGenerator.generate(RandomSource.create(seed), 5, ANCHOR, Direction.NORTH, block -> true).ifPresent(room ->
+                    helper.assertTrue(room.sizeCategory() != SizeCategory.TINY && room.spec().heights().size() <= 3
+                            && room.spec().heights().stream().allMatch(height -> height >= 4 && height <= 10),
+                            "Level 5 has no tiny rooms, at most three storeys and clear heights of 4 to 10"));
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void rarityWageCountsFullTenthsPerTierAndIsCapped(GameTestHelper helper) {
+        helper.assertTrue(ContractBalance.rarityWage(10, strip(90, 5, 5, 0)) == 2,
+                "Two second-tier materials of 5% each form one full tenth worth 2");
+        helper.assertTrue(ContractBalance.rarityWage(10, strip(85, 8, 7, 0)) == 2, "15% of the second tier is still one step");
+        helper.assertTrue(ContractBalance.rarityWage(10, strip(80, 10, 10, 0)) == 4, "20% of the second tier is two steps");
+        helper.assertTrue(ContractBalance.rarityWage(5, strip(50, 0, 0, 50)) == 2, "The surcharge is capped at half the base wage");
+        helper.assertTrue(ContractBalance.rarityWage(50, strip(50, 0, 0, 50)) == 25, "Five tenths of the fifth tier reach the cap");
+        helper.succeed();
+    }
+
+    /** A row of 100 mandatory blocks: stone, two second-tier materials and diamond. */
+    private static RoomBlueprint strip(int stone, int deepslate, int cherry, int diamond) {
+        Map<BlockPos, RoomBlueprint.Requirement> blocks = new java.util.LinkedHashMap<>();
+        Block[] materials = {Blocks.STONE, Blocks.DEEPSLATE_BRICKS, Blocks.CHERRY_PLANKS, Blocks.DIAMOND_BLOCK};
+        int[] counts = {stone, deepslate, cherry, diamond};
+        for (int material = 0; material < materials.length; material++) {
+            for (int index = 0; index < counts[material]; index++) {
+                blocks.put(new BlockPos(blocks.size(), 0, 0), new RoomBlueprint.Requirement(
+                        materials[material].defaultBlockState(), RoomBlueprint.Criterion.WALLS));
+            }
+        }
+        Bounds bounds = new Bounds(BlockPos.ZERO, new BlockPos(99, 1, 0));
+        return RoomBlueprint.of(bounds, List.of(bounds), blocks, List.of(new RoomBlueprint.Door(BlockPos.ZERO, Direction.NORTH)),
+                Optional.empty());
+    }
+
     private static Spec spec(List<Window> windows) {
         Surface stone = Surface.solid(Blocks.STONE);
         return new Spec(9, 9, List.of(4), stone, stone, stone, Set.of(Wall.OPPOSITE), windows,

@@ -33,8 +33,8 @@ import net.minecraftforge.gametest.PrefixGameTestTemplate;
 public class ConstructionFailureGameTests {
     private static final int PLACE = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
 
-    private record Scene(GameTestHelper helper, ServerLevel site, FakePlayer player, ContractData data,
-                         ContractData.Account account, Map<BlockPos, BlockState> touched) {
+    record Scene(GameTestHelper helper, ServerLevel site, FakePlayer player, ContractData data,
+                 ContractData.Account account, Map<BlockPos, BlockState> touched) {
         void set(BlockPos pos, BlockState state) {
             touched.putIfAbsent(pos.immutable(), site.getBlockState(pos));
             site.setBlock(pos, state, PLACE);
@@ -52,9 +52,21 @@ public class ConstructionFailureGameTests {
         void expireActiveOrder() {
             data.advanceSleep(account.active.deadline() - data.time(player.server) + 1);
         }
+
+        /** Without door blocks no room can attach to the starter room of the first floor. */
+        void removeStarterDoors() {
+            for (SiteDoor door : ConstructionSite.STARTER_DOORS) {
+                set(door.lower().above(), Blocks.AIR.defaultBlockState());
+                set(door.lower(), Blocks.AIR.defaultBlockState());
+            }
+        }
+
+        long remaining() {
+            return account.active.deadline() - data.time(player.server);
+        }
     }
 
-    private static void inScene(GameTestHelper helper, String name, Consumer<Scene> scenario) {
+    static void inScene(GameTestHelper helper, String name, Consumer<Scene> scenario) {
         var server = helper.getLevel().getServer();
         ServerLevel site = server.getLevel(ConstructionSite.SITE_LEVEL);
         FakePlayer player = new FakePlayer(server.overworld(), new GameProfile(UUID.randomUUID(), name));
@@ -64,7 +76,7 @@ public class ConstructionFailureGameTests {
         Scene scene = new Scene(helper, site, player, data, data.account(player.getUUID()), new HashMap<>());
         // Seeded so that the foreman's independent 10% nonsense fine never joins these sums.
         player.getRandom().setSeed(1L);
-        ContractEvents.withLoadedArea(site, new Bounds(new BlockPos(-16, 64, -16), new BlockPos(16, 70, 16)), () -> {
+        ContractEvents.withLoadedArea(site, new Bounds(new BlockPos(-40, 64, -40), new BlockPos(40, 70, 40)), () -> {
             try {
                 scenario.accept(scene);
             } finally {

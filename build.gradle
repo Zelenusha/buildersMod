@@ -83,3 +83,8 @@ if (project.hasProperty('walkthrough')) {
 }
 
 jar.finalizedBy('reobfJar')
+
+// Game tests build in the saved test world. Start each run from an empty one so earlier runs cannot crowd it.
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    doFirst { delete file('run-tests/world') }
+}

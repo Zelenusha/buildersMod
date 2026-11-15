@@ -96,10 +96,38 @@ public class IntroFlowGameTests {
         helper.succeed();
     }
 
-    @GameTest(template = "empty")
+    @GameTest(template = "empty", timeoutTicks = 400)
     public static void builderDeathPersistsReturnDayAndRespawnsOnce(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
         BlockPos ground = flatGround(helper, 128, 8);
+        forceLoad(level, ground, 8, true);
+        whenEntitiesTick(helper, level, ground, () -> {
+            try {
+                builderDeathAndReturn(helper, level, ground);
+            } finally {
+                forceLoad(level, ground, 8, false);
+            }
+        });
+    }
+
+    /** The platform lies outside the test structure. Entities in its new chunks stay hidden until the chunks tick. */
+    private static void whenEntitiesTick(GameTestHelper helper, ServerLevel level, BlockPos ground, Runnable scenario) {
+        if (level.isPositionEntityTicking(ground)) {
+            scenario.run();
+        } else {
+            helper.runAfterDelay(1, () -> whenEntitiesTick(helper, level, ground, scenario));
+        }
+    }
+
+    private static void forceLoad(ServerLevel level, BlockPos center, int radius, boolean loaded) {
+        for (int x = center.getX() - radius >> 4; x <= center.getX() + radius >> 4; x++) {
+            for (int z = center.getZ() - radius >> 4; z <= center.getZ() + radius >> 4; z++) {
+                level.setChunkForced(x, z, loaded);
+            }
+        }
+    }
+
+    private static void builderDeathAndReturn(GameTestHelper helper, ServerLevel level, BlockPos ground) {
         UUID owner = UUID.randomUUID();
         FakePlayer player = new FakePlayer(level, new GameProfile(owner, "intro-return"));
         player.moveTo(ground.getX() + 0.5, ground.getY() + 1, ground.getZ() + 0.5, 0, 0);
