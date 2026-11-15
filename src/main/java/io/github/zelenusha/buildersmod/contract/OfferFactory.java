@@ -211,7 +211,11 @@ final class OfferFactory {
     }
 
     static boolean canResume(ServerLevel site, ContractData.Accepted proposal) {
-        for (BlockPos position : proposal.blueprint().bounds().positions()) {
+        RoomBlueprint blueprint = proposal.blueprint();
+        // The bounds of a staircase include untouched parts of the starter room, including its return portal.
+        Iterable<BlockPos> workArea = proposal.kind() == ContractData.Kind.STAIRS
+                ? blueprint.requirements().keySet() : blueprint.bounds().positions();
+        for (BlockPos position : workArea) {
             if (obstructsPlacement(site, position, site.getBlockState(position))) {
                 return false;
             }

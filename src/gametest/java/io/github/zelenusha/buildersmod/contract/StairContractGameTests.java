@@ -2,6 +2,7 @@ package io.github.zelenusha.buildersmod.contract;
 
 import com.mojang.authlib.GameProfile;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
+import io.github.zelenusha.buildersmod.intro.IntroFixtures;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import io.github.zelenusha.buildersmod.site.SiteStairBlueprint;
 import java.util.ArrayList;
@@ -199,6 +200,62 @@ public final class StairContractGameTests {
                 .mapToObj(seed -> SiteStairBlueprint.selectMaterials(RandomSource.create(seed * 7_919L)))
                 .distinct().count();
         helper.assertTrue(combinations == 4, "Stairs and the upper shell draw independently from the two common palettes");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void reacceptsCancelledStairsWithTheSameProgressAndPenaltyHistory(GameTestHelper helper) {
+        ServerLevel site = site(helper);
+        FakePlayer player = player(site);
+        ContractData data = new ContractData();
+        ContractData.Account account = data.account(player.getUUID());
+        ContractData.Accepted offer = OfferFactory.stairs(site, account);
+        helper.assertTrue(offer != null, "The original staircase order is available");
+        long day = Math.floorDiv(player.server.overworld().getDayTime(), ContractBalance.TICKS_PER_DAY);
+        IntroFixtures.setEmployment(player, helper.absolutePos(BlockPos.ZERO), day);
+        account.active = offer.started(data.time(player.server));
+        account.special = account.active;
+        int price = offer.difficulty().extraDayPrice();
+        player.getInventory().add(new ItemStack(Items.EMERALD, 2 * price));
+        ContractEvents.buyTime(player, data, account);
+        helper.assertTrue(account.active.extraDay(), "The original acceptance uses its one paid extension");
+
+        var blueprint = offer.blueprint();
+        BlockPos placed = step(blueprint);
+        BlockState tread = blueprint.requirements().get(placed).expectedState();
+        Map<BlockPos, BlockState> before = new LinkedHashMap<>();
+        try {
+            setBlock(site, placed, tread, before);
+            for (var door : ConstructionSite.STARTER_DOORS) {
+                setBlock(site, door.lower(), Blocks.AIR.defaultBlockState(), before);
+            }
+            var incomplete = blueprint.check(site);
+            int baseFine = ContractBalance.incompleteFine(incomplete.mismatchCount(), incomplete.violatedCriteriaCount());
+            advanceToDeadline(data, player, account.active);
+            ContractEvents.checkDeadline(player, data, account, ignored -> {});
+            ContractEvents.cancel(player, data, account);
+            helper.assertTrue(account.active == null && account.special != null && account.failed.isEmpty()
+                            && account.special.lateCount() == 1 && account.special.extraDay() && site.getBlockState(placed).equals(tread),
+                    "Cancellation keeps the used day, previous deadline miss and installed blocks and does not start demolition");
+
+            data = reload(data);
+            account = data.account(player.getUUID());
+            ContractEvents.accept(player, data, account, -1);
+            helper.assertTrue(account.active != null && account.active.blueprint().encode().equals(blueprint.encode())
+                            && account.active.deadline() - data.time(player.server) == offer.difficulty().duration()
+                            && account.active.lateCount() == 1 && account.active.extraDay(),
+                    "The same blueprint returns after reload with its original duration and preserved history");
+            long deadline = account.active.deadline();
+            ContractEvents.buyTime(player, data, account);
+            helper.assertTrue(account.active.deadline() == deadline && carriedEmeralds(player) == price,
+                    "Reaccepting the same staircase does not reset the ordinary purchase");
+            advanceToDeadline(data, player, account.active);
+            ContractEvents.checkDeadline(player, data, account, ignored -> {});
+            helper.assertTrue(account.active.lateCount() == 2 && account.fines.entries().get(2).amount() == baseFine + 3,
+                    "The first missed deadline after reacceptance is the second miss for this blueprint");
+        } finally {
+            restore(site, before);
+        }
         helper.succeed();
     }
 
