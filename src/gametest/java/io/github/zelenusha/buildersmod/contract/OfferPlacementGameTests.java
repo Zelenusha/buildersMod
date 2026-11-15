@@ -6,7 +6,9 @@ import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Status;
 import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
@@ -23,6 +25,36 @@ import net.minecraftforge.gametest.PrefixGameTestTemplate;
 @PrefixGameTestTemplate(false)
 public final class OfferPlacementGameTests {
     private static final int FIXTURE_UPDATE = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
+
+    @GameTest(template = "empty")
+    public static void checksThatGlazingOpensOntoSpace(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos window = helper.absolutePos(new BlockPos(5, 28, 0));
+        BlockPos outside = window.east();
+        BlockPos beyond = outside.east();
+        var bounds = new RoomBlueprint.Bounds(window.offset(-4, -2, -2), window.offset(0, 2, 2));
+        var inside = new RoomBlueprint.Bounds(window.offset(-3, -1, -1), window.offset(-1, 1, 1));
+        var blueprint = RoomBlueprint.of(bounds, List.of(inside), Map.of(window, new RoomBlueprint.Requirement(
+                Blocks.GLASS.defaultBlockState(), Criterion.WINDOWS)),
+                List.of(new RoomBlueprint.Door(window.west(4), Direction.WEST)), Optional.empty());
+        BlockState formerOutside = level.getBlockState(outside);
+        BlockState formerBeyond = level.getBlockState(beyond);
+        try {
+            level.setBlock(outside, Blocks.STONE.defaultBlockState(), FIXTURE_UPDATE);
+            helper.assertTrue(!OfferFactory.windowsHaveSpace(level, blueprint), "A wall against the glass rejects the design");
+            level.setBlock(outside, Blocks.AIR.defaultBlockState(), FIXTURE_UPDATE);
+            helper.assertTrue(OfferFactory.windowsHaveSpace(level, blueprint), "The unobstructed side opens onto the worksite");
+            level.setBlock(outside, Blocks.GLASS.defaultBlockState(), FIXTURE_UPDATE);
+            level.setBlock(beyond, Blocks.STONE.defaultBlockState(), FIXTURE_UPDATE);
+            helper.assertTrue(!OfferFactory.windowsHaveSpace(level, blueprint), "Two glass faces cannot hide an immediate obstruction");
+            level.setBlock(beyond, Blocks.AIR.defaultBlockState(), FIXTURE_UPDATE);
+            helper.assertTrue(OfferFactory.windowsHaveSpace(level, blueprint), "Aligned glass can open into the adjacent space");
+        } finally {
+            level.setBlock(outside, formerOutside, FIXTURE_UPDATE);
+            level.setBlock(beyond, formerBeyond, FIXTURE_UPDATE);
+        }
+        helper.succeed();
+    }
 
     @GameTest(template = "empty")
     public static void marksRemovableObstaclesAndRejectsContainersAndBedrock(GameTestHelper helper) {

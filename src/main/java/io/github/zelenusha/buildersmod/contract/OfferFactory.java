@@ -302,6 +302,9 @@ final class OfferFactory {
                 || (floorCount < ConstructionSite.FLOOR_COUNT && candidate.bounds().max().getY() >= next)) {
             return null;
         }
+        if (!windowsHaveSpace(site, candidate)) {
+            return null;
+        }
         Map<BlockPos, RoomBlueprint.Requirement> requirements = new LinkedHashMap<>(candidate.requirements());
         Map<BlockPos, BlockState> originals = new LinkedHashMap<>();
         for (BlockPos position : candidate.bounds().positions()) {
@@ -335,6 +338,32 @@ final class OfferFactory {
         }
         return new Placement(RoomBlueprint.of(candidate.bounds(), candidate.interiorVolumes(), requirements, candidate.doors(),
                 candidate.bonus()), Map.copyOf(originals));
+    }
+
+    static boolean windowsHaveSpace(ServerLevel site, RoomBlueprint candidate) {
+        RoomBlueprint.Bounds bounds = candidate.bounds();
+        for (var entry : candidate.requirements().entrySet()) {
+            if (entry.getValue().criterion() != RoomBlueprint.Criterion.WINDOWS) {
+                continue;
+            }
+            BlockPos window = entry.getKey();
+            int faces = 0;
+            for (Direction face : Direction.Plane.HORIZONTAL) {
+                BlockPos outside = window.relative(face);
+                if (bounds.contains(outside)) {
+                    continue;
+                }
+                faces++;
+                BlockState next = site.getBlockState(outside);
+                if (!next.isAir() && (!GLAZING.contains(next.getBlock()) || !site.isEmptyBlock(outside.relative(face)))) {
+                    return false;
+                }
+            }
+            if (faces != 1) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean obstructsPlacement(ServerLevel site, BlockPos pos, BlockState state) {
