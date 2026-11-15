@@ -138,6 +138,10 @@ public final class IntroEvents {
         }
         IntroData data = IntroData.get(player.server);
         IntroData.Work work = data.work(player.getUUID());
+        upgradeOfficeNpcs(player, data, work);
+        if (work.dugout != null) {
+            IntroStructures.repairLegacyDugoutEntrance(player.serverLevel(), work.dugout, data);
+        }
         if (work.office != null || work.builder != null || work.builderReturnDay > day(player.serverLevel())) {
             return;
         }
@@ -145,12 +149,54 @@ public final class IntroEvents {
         if (position == null) {
             return;
         }
-        Villager builder = EntityType.VILLAGER.create(player.serverLevel());
+        Villager builder = IntroNpcs.BUILDER.get().create(player.serverLevel());
         if (builder != null && spawn(player.serverLevel(), builder, player, position, BUILDER, "Строитель")) {
             work.builder = builder.getUUID();
             work.builderReturnDay = -1;
             data.setDirty();
         }
+    }
+
+    private static void upgradeOfficeNpcs(ServerPlayer player, IntroData data, IntroData.Work work) {
+        ServerLevel level = player.serverLevel();
+        if (work.builder != null && level.getEntity(work.builder) instanceof Villager builder
+                && builder.getType() == EntityType.VILLAGER && builder.isAlive()
+                && isOwnedBy(player, builder) && builder.getTradingPlayer() == null) {
+            Villager replacement = copyNpc(level, builder, IntroNpcs.BUILDER.get());
+            if (replacement != null) {
+                work.builder = replacement.getUUID();
+                builder.discard();
+                data.setDirty();
+            }
+        }
+        if (work.office != null && work.foreman == null) {
+            AABB office = new AABB(work.office, work.office.offset(13, 6, 11));
+            var foremen = level.getEntitiesOfClass(Villager.class, office,
+                    villager -> villager.isAlive() && isOwnForeman(player, villager));
+            if (!foremen.isEmpty()) {
+                Villager foreman = foremen.get(0);
+                boolean legacy = foreman.getType() == EntityType.VILLAGER;
+                Villager replacement = legacy ? copyNpc(level, foreman, IntroNpcs.FOREMAN.get()) : foreman;
+                if (replacement != null) {
+                    work.foreman = replacement.getUUID();
+                    if (legacy) {
+                        foreman.discard();
+                    }
+                    data.setDirty();
+                }
+            }
+        }
+    }
+
+    private static Villager copyNpc(ServerLevel level, Villager original, EntityType<? extends Villager> type) {
+        Villager replacement = type.create(level);
+        if (replacement == null) {
+            return null;
+        }
+        CompoundTag snapshot = original.saveWithoutId(new CompoundTag());
+        snapshot.remove("UUID");
+        replacement.load(snapshot);
+        return level.addFreshEntity(replacement) ? replacement : null;
     }
 
     private static BlockPos nearbySpawn(ServerPlayer player) {
@@ -199,7 +245,7 @@ public final class IntroEvents {
     }
 
     private static void offerWork(ServerPlayer player) {
-        player.sendSystemMessage(Component.literal("Строитель: Нужна работа? Контора даст землянку и заказы на стройке."));
+        player.sendSystemMessage(Component.literal("Строитель: Нужна работа? Контора ищет людей на стройку. Жильём обеспечим."));
         player.sendSystemMessage(Component.literal("[Принять работу]")
                 .withStyle(style -> style.withColor(ChatFormatting.GREEN)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/" + COMMAND + " accept")))
@@ -226,10 +272,10 @@ public final class IntroEvents {
         IntroData data = IntroData.get(player.server);
         IntroStructures.Sites sites = IntroStructures.findSites(level, player.blockPosition(), data);
         if (sites == null) {
-            player.sendSystemMessage(Component.literal("Строитель: Здесь тесно для землянки и офиса. Поищем более ровное место."));
+            player.sendSystemMessage(Component.literal("Строитель: Здесь тесно. Подыщем место поровнее."));
             return 0;
         }
-        Villager foreman = EntityType.VILLAGER.create(level);
+        Villager foreman = IntroNpcs.FOREMAN.get().create(level);
         WanderingTrader trader = EntityType.WANDERING_TRADER.create(level);
         if (foreman == null || trader == null) {
             return 0;
@@ -258,11 +304,12 @@ public final class IntroEvents {
         work.firstOffersDay = day(level) + 1;
         IncidentWork.startClock(player);
         work.trader = trader.getUUID();
+        work.foreman = foreman.getUUID();
         data.setDirty();
 
         ConstructionSite.installOfficePortal(player, level, IntroStructures.officePortalFrame(office),
                 Direction.Axis.X, IntroStructures.officeArrival(office));
-        player.sendSystemMessage(Component.literal("Строитель: Землянка и офис готовы. Заказы появятся у прораба завтра."));
+        player.sendSystemMessage(Component.literal("Строитель: Офис готов. Заказы появятся у прораба завтра."));
         return 1;
     }
 

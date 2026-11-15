@@ -10,13 +10,13 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.npc.WanderingTrader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
-import net.minecraft.world.phys.AABB;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.FakePlayer;
 import net.minecraftforge.event.entity.player.PlayerEvent;
@@ -45,7 +45,7 @@ public class IntroFlowGameTests {
         try {
             IntroEvents.onLogin(new PlayerEvent.PlayerLoggedInEvent(player));
             IntroData.Work work = data.work(owner);
-            helper.assertTrue(work.builder != null && level.getEntity(work.builder) instanceof Villager,
+            helper.assertTrue(work.builder != null && level.getEntity(work.builder) instanceof IntroNpcs,
                     "The player's first login creates a nearby builder");
             UUID originalBuilder = work.builder;
             Villager builder = (Villager) level.getEntity(originalBuilder);
@@ -74,9 +74,9 @@ public class IntroFlowGameTests {
             helper.assertTrue(builder.blockPosition().equals(work.office.offset(3, 1, 3)), "The builder moved into the office");
             helper.assertTrue(level.getEntity(work.trader) instanceof WanderingTrader,
                     "The office has its own wandering trader");
-            helper.assertTrue(level.getEntitiesOfClass(Villager.class, new AABB(work.office, work.office.offset(13, 6, 11)))
-                    .stream().filter(entity -> IntroEvents.isOwnForeman(player, entity)).count() == 1,
-                    "The office has the player's foreman");
+            var foreman = level.getEntity(work.foreman);
+            helper.assertTrue(foreman != null && foreman.getType() == IntroNpcs.FOREMAN.get()
+                            && IntroEvents.isOwnForeman(player, foreman), "The office has the player's humanoid foreman");
             Block portal = ForgeRegistries.BLOCKS.getValue(ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "site_portal"));
             helper.assertTrue(portal != null && level.getBlockState(data.officePortalOpening(owner)).is(portal),
                     "The office portal is active on the first visit");
@@ -88,6 +88,7 @@ public class IntroFlowGameTests {
             IntroData.Work loadedWork = loaded.work(owner);
             helper.assertTrue(loaded.hasAccepted(owner) && originalBuilder.equals(loadedWork.builder)
                     && work.trader.equals(loadedWork.trader) && work.dugout.equals(loadedWork.dugout)
+                    && work.foreman.equals(loadedWork.foreman)
                     && work.office.equals(loadedWork.office) && work.firstOffersDay == loaded.firstOffersDay(owner)
                     && loaded.isProtected(protectedDirt), "Work and protected blocks survive an NBT roundtrip");
         } finally {
@@ -116,7 +117,7 @@ public class IntroFlowGameTests {
             IntroEvents.onLogin(new PlayerEvent.PlayerLoggedInEvent(player));
             helper.assertTrue(oldId.equals(work.builder) && work.builderReturnDay == -1,
                     "Unloading a living builder keeps its identity and no replacement is scheduled");
-            Villager reloaded = net.minecraft.world.entity.EntityType.VILLAGER.create(level);
+            Villager reloaded = IntroNpcs.BUILDER.get().create(level);
             if (reloaded == null) {
                 helper.fail("Could not reload the builder");
                 return;
@@ -144,6 +145,60 @@ public class IntroFlowGameTests {
             level.setDayTime(originalTime);
         }
         helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void upgradesLegacyOfficeStaffWithoutResettingTheirTrades(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos office = flatGround(helper, 48, 8);
+        UUID owner = UUID.randomUUID();
+        FakePlayer player = new FakePlayer(level, new GameProfile(owner, "intro-legacy"));
+        player.moveTo(office.getX() + 0.5, office.getY() + 1, office.getZ() + 0.5, 0, 0);
+        var data = IntroData.get(level.getServer());
+        var work = data.work(owner);
+        work.office = office;
+        work.dugout = office.west(20);
+        var legacyBuilder = legacyStaff(level, office.offset(3, 1, 3), owner, "buildersmod_builder");
+        var legacyForeman = legacyStaff(level, office.offset(5, 1, 5), owner, "buildersmod_foreman");
+        work.builder = legacyBuilder.getUUID();
+        IntroTrades.equipBuilder(legacyBuilder);
+        legacyBuilder.getOffers().get(0).increaseUses();
+        try {
+            IntroEvents.onLogin(new PlayerEvent.PlayerLoggedInEvent(player));
+            var builder = level.getEntity(work.builder);
+            var foreman = level.getEntity(work.foreman);
+            helper.assertTrue(builder instanceof IntroNpcs employee && builder.getType() == IntroNpcs.BUILDER.get()
+                            && builder.blockPosition().equals(legacyBuilder.blockPosition())
+                            && employee.getOffers().size() == 12 && employee.getOffers().get(0).getUses() == 1,
+                    "The existing builder keeps his position and trade stock when he changes type");
+            helper.assertTrue(foreman != null && foreman.getType() == IntroNpcs.FOREMAN.get()
+                            && foreman.blockPosition().equals(legacyForeman.blockPosition())
+                            && IntroEvents.isOwnForeman(player, foreman) && legacyForeman.isRemoved() && legacyBuilder.isRemoved(),
+                    "The owned foreman is replaced once while remaining in the same office");
+            IntroEvents.onLogin(new PlayerEvent.PlayerLoggedInEvent(player));
+            helper.assertTrue(builder == level.getEntity(work.builder) && foreman == level.getEntity(work.foreman),
+                    "Another login keeps the two upgraded NPCs");
+        } finally {
+            legacyBuilder.discard();
+            legacyForeman.discard();
+            if (work.builder != null && level.getEntity(work.builder) != null) {
+                level.getEntity(work.builder).discard();
+            }
+            if (work.foreman != null && level.getEntity(work.foreman) != null) {
+                level.getEntity(work.foreman).discard();
+            }
+        }
+        helper.succeed();
+    }
+
+    private static Villager legacyStaff(ServerLevel level, BlockPos pos, UUID owner, String tag) {
+        Villager villager = EntityType.VILLAGER.create(level);
+        villager.addTag(tag);
+        villager.getPersistentData().putUUID("buildersmod_intro_owner", owner);
+        villager.setNoAi(true);
+        villager.moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 180, 0);
+        level.addFreshEntity(villager);
+        return villager;
     }
 
     private static BlockPos flatGround(GameTestHelper helper, int xOffset, int radius) {

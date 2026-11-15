@@ -42,7 +42,7 @@ public class TraderInteractionGameTests {
         BlockPos office = helper.absolutePos(new BlockPos(0, 14, 0));
         ServerPlayer player = new ServerPlayer(level.getServer(), level, new GameProfile(UUID.randomUUID(), "merchant-owner"));
         RecordingConnection connection = new RecordingConnection(player);
-        var builder = EntityType.VILLAGER.create(level);
+        var builder = IntroNpcs.BUILDER.get().create(level);
         var trader = EntityType.WANDERING_TRADER.create(level);
         if (builder == null || trader == null) {
             helper.fail("Could not create test merchants");

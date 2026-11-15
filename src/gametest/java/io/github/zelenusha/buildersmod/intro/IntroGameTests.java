@@ -38,9 +38,9 @@ public class IntroGameTests {
                 && level.getBlockState(dugout.offset(4, 3, 4)).is(Blocks.GRASS_BLOCK), "Expected dirt floor and grass roof");
         helper.assertTrue(level.isEmptyBlock(dugout.offset(2, 1, 2)) && level.isEmptyBlock(dugout.offset(2, 2, 2)),
                 "Dugout has two blocks of headroom");
-        var stair = level.getBlockState(dugout.offset(2, 1, -1));
+        var stair = level.getBlockState(dugout.offset(2, 1, -2));
         helper.assertTrue(stair.is(Blocks.COBBLESTONE_STAIRS) && stair.getValue(StairBlock.FACING) == Direction.NORTH,
-                "Entry has a stair leading down into the dugout");
+                "Entry has a stair leading down to the dugout landing");
         var foot = level.getBlockState(dugout.offset(1, 1, 2));
         var head = level.getBlockState(dugout.offset(1, 1, 3));
         helper.assertTrue(foot.is(Blocks.WHITE_BED) && foot.getValue(BedBlock.PART) == BedPart.FOOT

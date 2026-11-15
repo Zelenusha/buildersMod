@@ -7,6 +7,7 @@ import io.github.zelenusha.buildersmod.BuildersMod;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.contract.ContractBalance;
 import io.github.zelenusha.buildersmod.contract.ContractNetwork;
+import io.github.zelenusha.buildersmod.intro.IntroNpcs;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -14,12 +15,12 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.PlayerFaceRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
@@ -44,7 +45,6 @@ public final class ContractClient {
     private static boolean paused;
     private static String call;
     private static int callTicks;
-    private static final ResourceLocation FOREMAN_HEAD = ResourceLocation.withDefaultNamespace("textures/entity/villager/villager.png");
 
     private ContractClient() { }
 
@@ -237,8 +237,7 @@ public final class ContractClient {
                     var message = Component.literal(call);
                     int bottom = top + Math.max(32, 23 + font.wordWrapHeight(message, callTextWidth));
                     graphics.fill(callLeft, top, width - 5, bottom, 0xD0232A33);
-                    graphics.blit(FOREMAN_HEAD, callLeft + 5, top + 6, 16, 20, 8.0F, 8.0F, 8, 10, 64, 64);
-                    graphics.blit(FOREMAN_HEAD, callLeft + 11, top + 20, 4, 8, 26.0F, 2.0F, 2, 4, 64, 64);
+                    PlayerFaceRenderer.draw(graphics, IntroNpcs.FOREMAN_SKIN, callLeft + 5, top + 6, 16);
                     graphics.drawString(font, "Прораб", callLeft + 25, top + 5, 0x8BCCF3, false);
                     graphics.drawWordWrap(font, message, callLeft + 25, top + 17, callTextWidth, 0xFFFFFF);
                 }

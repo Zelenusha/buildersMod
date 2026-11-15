@@ -86,6 +86,9 @@ public final class IntroData extends SavedData {
             if (saved.hasUUID("Trader")) {
                 work.trader = saved.getUUID("Trader");
             }
+            if (saved.hasUUID("Foreman")) {
+                work.foreman = saved.getUUID("Foreman");
+            }
         }
         for (long position : tag.getLongArray("ProtectedBlocks")) {
             data.protectedBlocks.add(position);
@@ -113,6 +116,9 @@ public final class IntroData extends SavedData {
             if (work.trader != null) {
                 saved.putUUID("Trader", work.trader);
             }
+            if (work.foreman != null) {
+                saved.putUUID("Foreman", work.foreman);
+            }
             savedPlayers.add(saved);
         });
         tag.put("Players", savedPlayers);
@@ -127,5 +133,6 @@ public final class IntroData extends SavedData {
         BlockPos dugout;
         long firstOffersDay = Long.MAX_VALUE;
         UUID trader;
+        UUID foreman;
     }
 }

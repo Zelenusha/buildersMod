@@ -3,6 +3,7 @@ package io.github.zelenusha.buildersmod;
 import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.contract.IncidentWork;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
+import io.github.zelenusha.buildersmod.intro.IntroNpcs;
 import io.github.zelenusha.buildersmod.maintenance.WorkItems;
 import io.github.zelenusha.buildersmod.maintenance.RoomResident;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
@@ -18,6 +19,7 @@ public final class BuildersMod {
         ConstructionSite.register(context.getModEventBus());
         WorkItems.register(context.getModEventBus());
         RoomResident.register(context.getModEventBus());
+        IntroNpcs.register(context.getModEventBus());
         IntroEvents.register(MinecraftForge.EVENT_BUS);
         ContractNetwork.register();
         IncidentWork.register();

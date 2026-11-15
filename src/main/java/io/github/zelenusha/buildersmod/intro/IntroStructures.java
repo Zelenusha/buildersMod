@@ -104,7 +104,8 @@ final class IntroStructures {
                 }
                 boolean approach = z < origin.getZ();
                 BlockPos foundation = new BlockPos(x, origin.getY() - 1, z);
-                int lowestChange = approach ? ground : origin.getY();
+                int lowestChange = approach
+                        ? approachGround(ground, width, x - origin.getX(), z - origin.getZ(), dugout) : origin.getY();
                 if (!approach && !supportsFloor(level, foundation)) {
                     lowestChange = foundation.getY();
                 }
@@ -146,6 +147,11 @@ final class IntroStructures {
         return z >= origin.getZ() || Math.abs(x - (origin.getX() + width / 2)) <= 1;
     }
 
+    private static int approachGround(int ground, int width, int x, int z, boolean dugout) {
+        // Reach the interior floor level before getting to the low lintel.
+        return dugout && x == width / 2 && z == -1 ? ground - 1 : ground;
+    }
+
     private static boolean naturalTerrain(BlockState state) {
         return state.isAir() || state.canBeReplaced() || state.is(BlockTags.DIRT)
                 || state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(BlockTags.SAND)
@@ -158,7 +164,8 @@ final class IntroStructures {
         buildOffice(level, sites.office());
     }
 
-    private static void prepare(ServerLevel level, BlockPos origin, int width, int depth, int height, int ground) {
+    private static void prepare(ServerLevel level, BlockPos origin, int width, int depth, int height, boolean dugout) {
+        int ground = origin.getY() + (dugout ? 1 : 0);
         for (int x = 0; x < width; x++) {
             for (int z = -2; z < depth; z++) {
                 if (!isBuildingOrApproach(origin, width, origin.getX() + x, origin.getZ() + z)) {
@@ -166,7 +173,7 @@ final class IntroStructures {
                 }
                 BlockPos column = origin.offset(x, 0, z);
                 int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, column.getX(), column.getZ()) - 1;
-                int target = z < 0 ? ground : origin.getY() - 1;
+                int target = z < 0 ? approachGround(ground, width, x, z, dugout) : origin.getY() - 1;
                 BlockPos foundation = new BlockPos(column.getX(), target, column.getZ());
                 int fillFrom = z < 0 || supportsFloor(level, foundation) ? surface + 1 : Math.min(surface + 1, target);
                 for (int y = fillFrom; y <= target; y++) {
@@ -188,7 +195,7 @@ final class IntroStructures {
     }
 
     private static void buildDugout(ServerLevel level, BlockPos origin) {
-        prepare(level, origin, 5, 5, 4, origin.getY() + 1);
+        prepare(level, origin, 5, 5, 4, true);
         for (int x = 0; x < 5; x++) {
             for (int z = 0; z < 5; z++) {
                 place(level, origin.offset(x, 0, z), Blocks.DIRT.defaultBlockState());
@@ -202,16 +209,40 @@ final class IntroStructures {
             }
         }
         placeDoor(level, origin.offset(2, 1, 0));
-        place(level, origin.offset(2, 1, -1), Blocks.COBBLESTONE_STAIRS.defaultBlockState()
-                .setValue(StairBlock.FACING, Direction.NORTH));
+        place(level, origin.offset(2, 1, -2), dugoutEntranceStair());
         BlockState bed = Blocks.WHITE_BED.defaultBlockState().setValue(BedBlock.FACING, Direction.SOUTH);
         place(level, origin.offset(1, 1, 2), bed.setValue(BedBlock.PART, BedPart.FOOT));
         place(level, origin.offset(1, 1, 3), bed.setValue(BedBlock.PART, BedPart.HEAD));
         place(level, origin.offset(3, 1, 3), Blocks.TORCH.defaultBlockState());
     }
 
+    static void repairLegacyDugoutEntrance(ServerLevel level, BlockPos origin, IntroData data) {
+        if (origin == null) {
+            return;
+        }
+        BlockPos door = origin.offset(2, 1, 0);
+        BlockPos oldStair = door.north();
+        BlockPos newStair = door.north(2);
+        if (!level.isLoaded(door) || !level.isLoaded(newStair) || !level.isLoaded(oldStair)
+                || level.getBlockState(oldStair) != dugoutEntranceStair()
+                || !level.getBlockState(newStair).is(Blocks.GRASS_BLOCK)
+                || !level.getBlockState(door).is(Blocks.OAK_DOOR) || !level.getBlockState(door.above()).is(Blocks.OAK_DOOR)
+                || !level.getBlockState(door.below()).is(Blocks.DIRT)
+                || !supportsFloor(level, oldStair.below())
+                || !level.isEmptyBlock(oldStair.above()) || !level.isEmptyBlock(newStair.above())
+                || data.isProtected(oldStair) || data.isProtected(newStair)) {
+            return;
+        }
+        place(level, newStair, dugoutEntranceStair());
+        place(level, oldStair, Blocks.AIR.defaultBlockState());
+    }
+
+    private static BlockState dugoutEntranceStair() {
+        return Blocks.COBBLESTONE_STAIRS.defaultBlockState().setValue(StairBlock.FACING, Direction.NORTH);
+    }
+
     private static void buildOffice(ServerLevel level, BlockPos origin) {
-        prepare(level, origin, 13, 11, 6, origin.getY());
+        prepare(level, origin, 13, 11, 6, false);
         for (int x = 0; x < 13; x++) {
             for (int z = 0; z < 11; z++) {
                 place(level, origin.offset(x, 0, z), Blocks.COBBLESTONE.defaultBlockState());

@@ -9,6 +9,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
@@ -78,8 +79,8 @@ public class IntroTerrainGameTests {
                 "The office occupies a farther plot");
         List<BlockPos> fills = new ArrayList<>();
         List<BlockPos> cuts = new ArrayList<>();
-        captureApproachChanges(level, dugout.offset(2, 1, -2), fills, cuts);
-        captureApproachChanges(level, office.offset(6, 0, -2), fills, cuts);
+        captureApproachChanges(level, dugout.offset(2, 1, -2), fills, cuts, true);
+        captureApproachChanges(level, office.offset(6, 0, -2), fills, cuts, false);
         helper.assertTrue(!fills.isEmpty() || !cuts.isEmpty(), "An approach crosses uneven natural terrain");
 
         IntroStructures.build(level, sites);
@@ -88,6 +89,7 @@ public class IntroTerrainGameTests {
                         && cuts.stream().allMatch(level::isEmptyBlock),
                 "Terrain preparation fills the low shoulder and cuts the high shoulder");
         checkApproach(helper, dugout.offset(2, 1, 0), dugout.getY() + 1, true);
+        checkStandingPlayerPassesDugoutDoor(helper, dugout.offset(2, 1, 0));
         checkApproach(helper, office.offset(6, 1, 0), office.getY(), false);
         checkFoundation(helper, dugout, 5, 5, Blocks.DIRT);
         checkFoundation(helper, office, 13, 11, Blocks.COBBLESTONE);
@@ -95,6 +97,7 @@ public class IntroTerrainGameTests {
                 && level.getFluidState(eastPool.above()).is(FluidTags.WATER), "The pools stay in place");
         helper.assertTrue(level.getBlockEntity(chestPos) instanceof ChestBlockEntity preserved
                 && ItemStack.matches(preserved.getItem(3), stored), "The occupied plot's chest and contents stay intact");
+        checkLegacyDugoutRepair(helper, dugout);
         helper.succeed();
     }
 
@@ -104,10 +107,11 @@ public class IntroTerrainGameTests {
         return x >= 0 && x < width && (z >= 0 && z < depth || z >= -2 && z < 0 && Math.abs(x - width / 2) <= 1);
     }
 
-    private static void captureApproachChanges(ServerLevel level, BlockPos path, List<BlockPos> fills, List<BlockPos> cuts) {
+    private static void captureApproachChanges(ServerLevel level, BlockPos path, List<BlockPos> fills, List<BlockPos> cuts,
+                                               boolean hasStair) {
         for (int x = -1; x <= 1; x++) {
             BlockPos surface = path.east(x);
-            if (level.isEmptyBlock(surface)) {
+            if ((x != 0 || !hasStair) && level.isEmptyBlock(surface)) {
                 fills.add(surface);
             }
             if (!level.isEmptyBlock(surface.above())) {
@@ -124,9 +128,10 @@ public class IntroTerrainGameTests {
                 && upper.is(Blocks.OAK_DOOR) && upper.getValue(DoorBlock.HALF) == DoubleBlockHalf.UPPER,
                 "The approach ends at a complete oak door");
         for (int step = 1; step <= 2; step++) {
-            BlockPos path = new BlockPos(door.getX(), groundY, door.getZ() - step);
+            boolean lowerLanding = dugout && step == 1;
+            BlockPos path = new BlockPos(door.getX(), groundY - (lowerLanding ? 1 : 0), door.getZ() - step);
             var surface = level.getBlockState(path);
-            boolean entranceStair = dugout && step == 1;
+            boolean entranceStair = dugout && step == 2;
             helper.assertTrue(entranceStair
                             ? surface.is(Blocks.COBBLESTONE_STAIRS) && surface.getValue(StairBlock.FACING) == Direction.NORTH
                             : surface.isFaceSturdy(level, path, Direction.UP),
@@ -137,6 +142,41 @@ public class IntroTerrainGameTests {
         BlockPos outside = door.north(3);
         int outsideY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, outside.getX(), outside.getZ()) - 1;
         helper.assertTrue(Math.abs(outsideY - groundY) <= 1, "The prepared approach connects to the surrounding terrain");
+    }
+
+    private static void checkStandingPlayerPassesDugoutDoor(GameTestHelper helper, BlockPos door) {
+        ServerLevel level = helper.getLevel();
+        var lower = level.getBlockState(door);
+        var upper = level.getBlockState(door.above());
+        level.setBlock(door, lower.setValue(DoorBlock.OPEN, true), Block.UPDATE_CLIENTS);
+        level.setBlock(door.above(), upper.setValue(DoorBlock.OPEN, true), Block.UPDATE_CLIENTS);
+        for (int tenth = -6; tenth <= 5; tenth++) {
+            helper.assertTrue(level.noCollision(EntityType.PLAYER.getDimensions().makeBoundingBox(
+                            door.getX() + 0.5, door.getY(), door.getZ() + tenth / 10.0)),
+                    "A standing player has a clear path from the landing under the open dugout door's lintel");
+        }
+        level.setBlock(door, lower, Block.UPDATE_CLIENTS);
+        level.setBlock(door.above(), upper, Block.UPDATE_CLIENTS);
+    }
+
+    private static void checkLegacyDugoutRepair(GameTestHelper helper, BlockPos dugout) {
+        ServerLevel level = helper.getLevel();
+        BlockPos door = dugout.offset(2, 1, 0);
+        BlockPos oldStair = door.north();
+        BlockPos newStair = door.north(2);
+        var stair = level.getBlockState(newStair);
+        level.setBlock(oldStair, stair, Block.UPDATE_CLIENTS);
+        set(level, newStair, Blocks.GRASS_BLOCK);
+        IntroData data = new IntroData();
+        data.protect(newStair);
+        IntroStructures.repairLegacyDugoutEntrance(level, dugout, data);
+        helper.assertTrue(level.getBlockState(oldStair) == stair && level.getBlockState(newStair).is(Blocks.GRASS_BLOCK),
+                "Legacy repairs leave the protected approach alone");
+        data.unprotect(newStair);
+        IntroStructures.repairLegacyDugoutEntrance(level, dugout, data);
+        helper.assertTrue(level.isEmptyBlock(oldStair) && level.getBlockState(newStair) == stair,
+                "The old untouched approach receives a lower landing");
+        checkStandingPlayerPassesDugoutDoor(helper, door);
     }
 
     private static void checkFoundation(GameTestHelper helper, BlockPos origin, int width, int depth, Block floor) {
