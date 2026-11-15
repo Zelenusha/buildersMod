@@ -31,6 +31,10 @@ public final class ContractStateGameTests {
                 "Local cherry logs allow crafting cherry planks");
         helper.assertTrue(OfferFactory.availableLocally(Blocks.CHERRY_PLANKS, Set.of(), item -> item == Items.CHERRY_LOG),
                 "A stocked log also allows crafting planks");
+        helper.assertTrue(!OfferFactory.availableLocally(Blocks.SPRUCE_PLANKS, Set.of(Biomes.DESERT), item -> false)
+                        && OfferFactory.availableLocally(Blocks.SPRUCE_PLANKS, Set.of(Biomes.TAIGA), item -> false)
+                        && OfferFactory.availableLocally(Blocks.SPRUCE_PLANKS, Set.of(), item -> item == Items.SPRUCE_LOG),
+                "Plank alternatives have the same local biome or trade restriction as their primary materials");
         helper.assertTrue(!OfferFactory.availableLocally(Blocks.BLUE_STAINED_GLASS_PANE, Set.of(Biomes.FOREST), item -> false),
                 "Glass needs sand or a matching trade");
         helper.assertTrue(OfferFactory.availableLocally(Blocks.BLUE_STAINED_GLASS_PANE, Set.of(), item -> item == Items.SAND),

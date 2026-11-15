@@ -44,6 +44,15 @@ final class OfferFactory {
             Biomes.DEEP_FROZEN_OCEAN, Biomes.DEEP_LUKEWARM_OCEAN);
     private static final Set<Block> GLAZING = Set.of(Blocks.GLASS, Blocks.GLASS_PANE, Blocks.WHITE_STAINED_GLASS,
             Blocks.WHITE_STAINED_GLASS_PANE, Blocks.BLUE_STAINED_GLASS, Blocks.BLUE_STAINED_GLASS_PANE);
+    private static final Map<Block, WoodSource> WOOD = Map.of(
+            Blocks.BIRCH_PLANKS, new WoodSource(Items.BIRCH_LOG, Set.of(Biomes.FOREST, Biomes.BIRCH_FOREST, Biomes.OLD_GROWTH_BIRCH_FOREST)),
+            Blocks.SPRUCE_PLANKS, new WoodSource(Items.SPRUCE_LOG, Set.of(Biomes.TAIGA, Biomes.SNOWY_TAIGA, Biomes.GROVE,
+                    Biomes.OLD_GROWTH_PINE_TAIGA, Biomes.OLD_GROWTH_SPRUCE_TAIGA)),
+            Blocks.DARK_OAK_PLANKS, new WoodSource(Items.DARK_OAK_LOG, Set.of(Biomes.DARK_FOREST)),
+            Blocks.JUNGLE_PLANKS, new WoodSource(Items.JUNGLE_LOG, Set.of(Biomes.JUNGLE, Biomes.SPARSE_JUNGLE, Biomes.BAMBOO_JUNGLE)),
+            Blocks.ACACIA_PLANKS, new WoodSource(Items.ACACIA_LOG, Set.of(Biomes.SAVANNA, Biomes.SAVANNA_PLATEAU, Biomes.WINDSWEPT_SAVANNA)),
+            Blocks.MANGROVE_PLANKS, new WoodSource(Items.MANGROVE_LOG, Set.of(Biomes.MANGROVE_SWAMP)),
+            Blocks.CHERRY_PLANKS, new WoodSource(Items.CHERRY_LOG, Set.of(Biomes.CHERRY_GROVE)));
 
     private OfferFactory() { }
 
@@ -114,7 +123,7 @@ final class OfferFactory {
     private static Predicate<Block> availableMaterials(ServerPlayer player) {
         var sources = new java.util.HashSet<>(SAND_BIOMES);
         sources.addAll(MONUMENT_BIOMES);
-        sources.add(Biomes.CHERRY_GROVE);
+        WOOD.values().forEach(wood -> sources.addAll(wood.biomes()));
         Set<ResourceKey<Biome>> nearby = IntroEvents.nearbyBiomes(player, sources);
         Map<Item, Boolean> stocks = new HashMap<>();
         return material -> availableLocally(material, nearby, item -> stocks.computeIfAbsent(item,
@@ -125,8 +134,9 @@ final class OfferFactory {
         if (MaterialRarity.tier(block) == 0) {
             return false;
         }
-        if (block == Blocks.CHERRY_PLANKS) {
-            return nearby.contains(Biomes.CHERRY_GROVE) || stocked.test(Items.CHERRY_LOG) || stocked.test(Items.CHERRY_PLANKS);
+        WoodSource wood = WOOD.get(block);
+        if (wood != null) {
+            return wood.biomes().stream().anyMatch(nearby::contains) || stocked.test(wood.log()) || stocked.test(block.asItem());
         }
         if (block == Blocks.SANDSTONE || GLAZING.contains(block)) {
             return SAND_BIOMES.stream().anyMatch(nearby::contains) || stocked.test(Items.SAND) || stocked.test(block.asItem());
@@ -476,4 +486,6 @@ final class OfferFactory {
     private record Placement(RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) { }
 
     private record WindowTarget(WindowDestination destination, BlockPos origin) { }
+
+    private record WoodSource(Item log, Set<ResourceKey<Biome>> biomes) { }
 }

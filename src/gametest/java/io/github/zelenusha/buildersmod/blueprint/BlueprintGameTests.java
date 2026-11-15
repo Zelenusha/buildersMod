@@ -39,6 +39,47 @@ public class BlueprintGameTests {
     private static final BlockPos ANCHOR = new BlockPos(108, 72, -95);
 
     @GameTest(template = "empty")
+    public static void acceptsOnlyThePlankAlternativesRolledForTheOrder(GameTestHelper helper) {
+        var stone = Surface.solid(Blocks.STONE);
+        var pattern = new Surface(Blocks.OAK_PLANKS.defaultBlockState(), Pattern.CHECKERBOARD,
+                Optional.of(Blocks.CHERRY_PLANKS.defaultBlockState()));
+        var spec = new Spec(5, 5, List.of(4), stone, pattern, stone, Set.of(Wall.OPPOSITE), List.of(),
+                List.of(new Fixture(0, new BlockPos(1, 1, 1), Blocks.TORCH.defaultBlockState())), List.of(), Optional.empty());
+        var source = RectangularRoomBlueprint.at(ANCHOR, Direction.NORTH, spec);
+        Set<Block> local = Set.of(Blocks.OAK_PLANKS, Blocks.CHERRY_PLANKS, Blocks.BIRCH_PLANKS, Blocks.SPRUCE_PLANKS, Blocks.DARK_OAK_PLANKS);
+        var chosen = RoomGenerator.withPlankAlternatives(source, RandomSource.create(229), local::contains);
+        var reloaded = RoomBlueprint.decode(chosen.encode());
+        Map<BlockPos, BlockState> blocks = new HashMap<>();
+        var options = new HashMap<Block, List<BlockState>>();
+        for (var entry : reloaded.requirements().entrySet()) {
+            var requirement = entry.getValue();
+            blocks.put(entry.getKey(), requirement.expectedState());
+            if (requirement.criterion() == Criterion.WALLS) {
+                var previous = options.putIfAbsent(requirement.expectedState().getBlock(), requirement.replacements());
+                helper.assertTrue(previous == null || previous.equals(requirement.replacements()),
+                        "One wood shares the same saved alternatives at all its wall positions");
+                if (!requirement.replacements().isEmpty()) {
+                    blocks.put(entry.getKey(), requirement.replacements().get(0));
+                }
+            }
+        }
+        var oak = options.get(Blocks.OAK_PLANKS);
+        var cherry = options.get(Blocks.CHERRY_PLANKS);
+        helper.assertTrue(oak != null && !oak.isEmpty() && cherry != null && !cherry.isEmpty()
+                        && oak.stream().noneMatch(cherry::contains)
+                        && reloaded.check(pos -> blocks.getOrDefault(pos, Blocks.AIR.defaultBlockState())).complete(),
+                "Rolled alternatives for the checkerboard remain disjoint and complete the room after reload");
+        BlockPos plank = reloaded.requirements().entrySet().stream().filter(entry -> entry.getValue().expectedState().is(Blocks.OAK_PLANKS))
+                .findFirst().orElseThrow().getKey();
+        blocks.put(plank, Blocks.MANGROVE_PLANKS.defaultBlockState());
+        helper.assertTrue(reloaded.check(pos -> blocks.getOrDefault(pos, Blocks.AIR.defaultBlockState())).statuses().get(plank) == Status.WRONG,
+                "An unlisted wood cannot fulfill the order");
+        helper.assertTrue(SampleRoomBlueprint.at(ANCHOR, Direction.NORTH).requirements().values().stream()
+                .allMatch(requirement -> requirement.replacements().isEmpty()), "The fixed sample keeps its exact materials");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
     public static void laysOutTheSameRoomBehindEachConnectingDoor(GameTestHelper helper) {
         for (Direction outward : Direction.Plane.HORIZONTAL) {
             RoomBlueprint blueprint = SampleRoomBlueprint.at(ANCHOR, outward);

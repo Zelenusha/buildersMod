@@ -10,7 +10,9 @@ import io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Window
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Criterion;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -43,6 +45,9 @@ public final class RoomGenerator {
     private static final int[][] FURNITURE_COUNT = {{25, 75, 0}, {20, 65, 15}, {15, 55, 30}, {10, 45, 45}, {5, 35, 60}};
     private static final int[] FURNITURE_TYPE = {35, 25, 40};
     private static final int[][] GLAZING_SIZES = {{1, 1}, {2, 2}, {3, 3}, {5, 3}};
+    private static final List<Block> PLANKS = List.of(Blocks.OAK_PLANKS, Blocks.BIRCH_PLANKS, Blocks.SPRUCE_PLANKS,
+            Blocks.DARK_OAK_PLANKS, Blocks.JUNGLE_PLANKS, Blocks.ACACIA_PLANKS, Blocks.MANGROVE_PLANKS, Blocks.CHERRY_PLANKS,
+            Blocks.CRIMSON_PLANKS, Blocks.WARPED_PLANKS);
 
     private RoomGenerator() {
     }
@@ -142,11 +147,45 @@ public final class RoomGenerator {
             }
             Spec spec = new Spec(width, depth, heights, shell.floor(), shell.walls(), shell.ceiling(), doors, windows,
                     lights, furniture, bonus, passage);
-            RoomBlueprint blueprint = RectangularRoomBlueprint.at(anchor, outward, spec);
+            RoomBlueprint blueprint = withPlankAlternatives(RectangularRoomBlueprint.at(anchor, outward, spec), random, available);
             return Optional.of(new GeneratedRoom(blueprint, size, level + 1, spec));
         } catch (IllegalArgumentException incompatibleGeometry) {
             return Optional.empty();
         }
+    }
+
+    static RoomBlueprint withPlankAlternatives(RoomBlueprint room, RandomSource random, Predicate<Block> available) {
+        var primary = room.requirements().values().stream().filter(RoomGenerator::plankSurface)
+                .map(requirement -> requirement.expectedState().getBlock()).distinct().toList();
+        if (primary.isEmpty()) {
+            return room;
+        }
+        var pool = new ArrayList<>(PLANKS.stream().filter(available).filter(block -> !primary.contains(block)).toList());
+        if (pool.isEmpty()) {
+            return room;
+        }
+        Map<Block, List<BlockState>> alternatives = new LinkedHashMap<>();
+        for (Block block : primary) {
+            var choices = new ArrayList<BlockState>();
+            if (!pool.isEmpty()) {
+                int count = 1 + random.nextInt(Math.min(2, pool.size()));
+                for (int index = 0; index < count; index++) {
+                    choices.add(pool.remove(random.nextInt(pool.size())).defaultBlockState());
+                }
+            }
+            alternatives.put(block, List.copyOf(choices));
+        }
+        var requirements = new LinkedHashMap<>(room.requirements());
+        requirements.replaceAll((pos, requirement) -> plankSurface(requirement)
+                ? new RoomBlueprint.Requirement(requirement.expectedState(), requirement.criterion(),
+                        alternatives.get(requirement.expectedState().getBlock())) : requirement);
+        return RoomBlueprint.of(room.bounds(), room.interiorVolumes(), requirements, room.doors(), room.bonus(), room.windows());
+    }
+
+    private static boolean plankSurface(RoomBlueprint.Requirement requirement) {
+        return PLANKS.contains(requirement.expectedState().getBlock())
+                && (requirement.criterion() == Criterion.FLOOR || requirement.criterion() == Criterion.WALLS
+                || requirement.criterion() == Criterion.CEILING);
     }
 
     private static Passage choosePassage(RandomSource random, int width, int depth, List<Integer> heights,
@@ -228,7 +267,8 @@ public final class RoomGenerator {
 
     private static boolean otherDimension(Block block) {
         return block == Blocks.POLISHED_BLACKSTONE || block == Blocks.QUARTZ_BLOCK || block == Blocks.PURPUR_BLOCK
-                || block == Blocks.END_STONE_BRICKS || block == Blocks.NETHERITE_BLOCK || block == Blocks.GLOWSTONE;
+                || block == Blocks.END_STONE_BRICKS || block == Blocks.NETHERITE_BLOCK || block == Blocks.GLOWSTONE
+                || block == Blocks.CRIMSON_PLANKS || block == Blocks.WARPED_PLANKS;
     }
 
     private static List<Window> selectWindows(RandomSource random, int level, int width, int depth,
