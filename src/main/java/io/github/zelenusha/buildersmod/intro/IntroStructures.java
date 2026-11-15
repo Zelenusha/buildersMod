@@ -103,7 +103,11 @@ final class IntroStructures {
                     return false;
                 }
                 boolean approach = z < origin.getZ();
+                BlockPos foundation = new BlockPos(x, origin.getY() - 1, z);
                 int lowestChange = approach ? ground : origin.getY();
+                if (!approach && !supportsFloor(level, foundation)) {
+                    lowestChange = foundation.getY();
+                }
                 for (int y = Math.min(lowestChange, surface + 1); y <= box.maxY(); y++) {
                     BlockPos position = new BlockPos(x, y, z);
                     BlockState current = level.getBlockState(position);
@@ -163,7 +167,9 @@ final class IntroStructures {
                 BlockPos column = origin.offset(x, 0, z);
                 int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, column.getX(), column.getZ()) - 1;
                 int target = z < 0 ? ground : origin.getY() - 1;
-                for (int y = surface + 1; y <= target; y++) {
+                BlockPos foundation = new BlockPos(column.getX(), target, column.getZ());
+                int fillFrom = z < 0 || supportsFloor(level, foundation) ? surface + 1 : Math.min(surface + 1, target);
+                for (int y = fillFrom; y <= target; y++) {
                     level.setBlock(new BlockPos(column.getX(), y, column.getZ()), Blocks.DIRT.defaultBlockState(), Block.UPDATE_CLIENTS);
                 }
                 for (int y = target + 1; y <= origin.getY() + height + MAX_SLOPE; y++) {
@@ -174,6 +180,11 @@ final class IntroStructures {
                 }
             }
         }
+    }
+
+    private static boolean supportsFloor(ServerLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        return state.getFluidState().isEmpty() && state.isFaceSturdy(level, pos, Direction.UP);
     }
 
     private static void buildDugout(ServerLevel level, BlockPos origin) {
