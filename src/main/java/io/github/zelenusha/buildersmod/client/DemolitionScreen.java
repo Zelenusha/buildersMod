@@ -9,7 +9,7 @@ import net.minecraft.network.chat.Component;
 final class DemolitionScreen extends Screen {
     private static final int WIDTH = 284;
     private static final int HEIGHT = 196;
-    private final ContractNetwork.DemolitionPanel panel;
+    final ContractNetwork.DemolitionPanel panel;
     private int selected;
     private int offset;
 

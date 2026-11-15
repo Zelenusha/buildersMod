@@ -9,7 +9,7 @@ import net.minecraft.network.chat.Component;
 final class FineScreen extends Screen {
     private static final int WIDTH = 344;
     private static final int HEIGHT = 232;
-    private final ContractNetwork.FinePanel panel;
+    final ContractNetwork.FinePanel panel;
     private final long receivedNanos = System.nanoTime();
     private int selected;
     private boolean refreshing;

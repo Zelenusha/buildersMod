@@ -102,10 +102,16 @@ public final class ClientWalkthrough {
             File[] old = new File(mc.gameDirectory, "screenshots").listFiles();
             if (old != null) {
                 for (File file : old) {
-                    file.delete();
+                    if (file.getName().startsWith(SCENARIO + "-")) {
+                        file.delete();
+                    }
                 }
             }
-            mainCycle(mc);
+            switch (SCENARIO) {
+                case "main" -> mainCycle(mc);
+                case "fines" -> finesAndDemolition(mc);
+                default -> throw new IllegalArgumentException("Неизвестный сценарий " + SCENARIO);
+            }
         }
         Step step = STEPS.peek();
         if (step == null) {
@@ -137,7 +143,7 @@ public final class ClientWalkthrough {
         if (failure != null) {
             REPORT.add("FAIL " + failure);
             REPORT.add("Чат: " + CHAT);
-            Screenshot.grab(mc.gameDirectory, "FAIL.png", mc.getMainRenderTarget(), message -> { });
+            Screenshot.grab(mc.gameDirectory, SCENARIO + "-FAIL.png", mc.getMainRenderTarget(), message -> { });
         } else {
             REPORT.add("ИТОГ: все шаги пройдены");
         }
@@ -169,7 +175,7 @@ public final class ClientWalkthrough {
 
     private static void shot(String name) {
         pause(10);
-        run("", () -> Screenshot.grab(mc().gameDirectory, String.format(Locale.ROOT, "%02d-%s.png", ++shots, name),
+        run("", () -> Screenshot.grab(mc().gameDirectory, String.format(Locale.ROOT, "%s-%02d-%s.png", SCENARIO, ++shots, name),
                 mc().getMainRenderTarget(), message -> { }));
         pause(2);
     }
@@ -318,11 +324,7 @@ public final class ClientWalkthrough {
 
     // Scenario: from the first meeting with the builder to the first wage and a reload
 
-    private static void mainCycle(Minecraft mc) {
-
-
-        UUID[] npcs = new UUID[3];
-
+    private static void enterFreshWorld(Minecraft mc) {
         run("создан новый мир выживания", () -> {
             try {
                 if (mc.getLevelSource().levelExists(WORLD)) {
@@ -346,6 +348,183 @@ public final class ClientWalkthrough {
         step("игрок появился в мире", 2400, () -> mc.player != null && mc.level != null && mc.screen == null
                 && server() != null && serverPlayer() != null);
         pause(100);
+    }
+
+    /** The shortest way to a working foreman: accept the job and skip to the first offer day. */
+    private static void hire(Minecraft mc) {
+        enterFreshWorld(mc);
+        step("рядом с игроком появился строитель", 200, () -> npc(BUILDER) != null);
+        run("", () -> mc.player.connection.sendCommand("buildersmod_job accept"));
+        step("работа принята, офис построен", 200,
+                () -> onServer(() -> IntroData.get(server()).hasAccepted(mc.player.getUUID())));
+        run("", () -> {
+            office = IntroData.get(server()).officeArrival(mc.player.getUUID()).offset(-8, -1, -5);
+            command("time add 24000");
+        });
+        pause(20);
+    }
+
+    private static ContractNetwork.FinePanel fines() {
+        check(mc().screen instanceof FineScreen, "Открыт экран штрафов");
+        return ((FineScreen) mc().screen).panel;
+    }
+
+    private static ContractNetwork.DemolitionPanel demolitions() {
+        check(mc().screen instanceof DemolitionScreen, "Открыт экран сносов");
+        return ((DemolitionScreen) mc().screen).panel;
+    }
+
+    // Scenario: a cancelled room, its fine, a lost and a won appeal, the compensation and the demolition
+
+    private static void finesAndDemolition(Minecraft mc) {
+        List<String> argument = List.of("Прошу открыть запись о штрафе.", "Сначала сверим назначенную сумму.",
+                "Затем сверим основание с условиями заказа.", "По условиям заказа проверим расчёт.", "Прошу пересмотреть штраф.");
+        BlockPos[] planks = new BlockPos[2];
+        hire(mc);
+        openForeman();
+        press("меню заказов открыто", "Открыть заказы");
+        run("карточка перечисляет обязательные условия словами", () -> check(panel().cards().get(0).conditions()
+                .contains("Внутри 5×5, квадратная") && panel().cards().get(1).conditions().size() >= 5, "Условия на карточке"));
+        shot("offer-with-conditions");
+        run("", () -> button("2").onPress());
+        shot("generated-offer-with-conditions");
+        run("", () -> button("1").onPress());
+        press("пробная комната принята", "Принять заказ");
+        closeScreen();
+        run("в стене будущей комнаты поставлены два блока досок", () -> onServer(() -> {
+            RoomBlueprint room = ContractFixtures.activeBlueprint(serverPlayer());
+            planks[0] = new BlockPos(room.bounds().max().getX(), room.bounds().min().getY() + 1, room.bounds().min().getZ() + 1);
+            planks[1] = planks[0].above();
+            for (BlockPos pos : planks) {
+                server().getLevel(ConstructionSite.SITE_LEVEL).setBlock(pos, Blocks.OAK_PLANKS.defaultBlockState(), PLACE);
+            }
+            return null;
+        }));
+
+        // FR-149, FR-131, FR-70: cancellation
+        openForeman();
+        press("", "Открыть заказы");
+        press("заказ отменён у прораба", "Отменить");
+        run("один штраф по формуле, один снос, место в списке обновлено", () -> {
+            check(panel().feedback().equals("Заказ отменён. Штраф: 25 изумрудов."), "146 позиций и 5 критериев: " + panel().feedback());
+            check(ContractFixtures.fines(serverPlayer()) == 1 && ContractFixtures.demolitions(serverPlayer()) == 1
+                    && ContractFixtures.activeBlueprint(serverPlayer()) == null, "Один штраф и один снос, слот свободен");
+            check(panel().cards().stream().anyMatch(card -> card.slot() == 0 && !card.title().equals("Пробная комната")),
+                    "В первом месте новое предложение");
+        });
+        shot("order-cancelled");
+        closeScreen();
+
+        // FR-53, FR-54, FR-55: the fine list and two appeal attempts
+        openForeman();
+        shot("dialogue-with-fine-and-demolition");
+        press("экран штрафов открыт из диалога", "Штрафы");
+        run("штраф за отмену виден целиком, доступны две попытки", () -> {
+            var fine = fines().fines().get(0);
+            check(fine.amount() == 25 && fine.outstanding() == 25 && fine.attemptsLeft() == 2 && !fine.overturned(),
+                    "Штраф 25, остаток 25, попыток 2");
+        });
+        shot("fine-list");
+        press("первая попытка спора началась", "Оспорить штраф");
+        run("в попытке семь карточек и таймер на 15 секунд", () -> {
+            var attempt = fines().attempt();
+            check(attempt != null && attempt.cards().size() == 7 && attempt.remainingMillis() > 13_000
+                    && attempt.required() >= 1 && attempt.required() <= 5, "Семь карточек, таймер идёт");
+            REPORT.add("Нужно карточек: " + attempt.required() + ". " + attempt.hint());
+        });
+        shot("appeal-attempt");
+        Screen[] before = new Screen[1];
+        run("", () -> {
+            before[0] = mc.screen;
+            String wrong = fines().attempt().cards().stream().map(card -> card.text())
+                    .filter(text -> !argument.contains(text)).findFirst().orElseThrow();
+            button(wrong).onPress();
+        });
+        step("неверная карточка завершает попытку без зачёта", 100, () -> mc.screen instanceof FineScreen
+                && mc.screen != before[0] && fines().attempt() == null);
+        run("осталась одна попытка, штраф в силе", () -> {
+            check(fines().feedback().startsWith("Аргумент не принят"), fines().feedback());
+            check(fines().fines().get(0).attemptsLeft() == 1 && !fines().fines().get(0).overturned(), "Одна попытка осталась");
+        });
+        shot("appeal-wrong-order");
+        press("вторая попытка началась", "Оспорить штраф");
+        int[] chosen = {0};
+        step("верная последовательность выигрывает спор", 300, () -> {
+            if (!(mc.screen instanceof FineScreen) || mc.screen == before[0]) {
+                return false;
+            }
+            if (fines().attempt() == null) {
+                return true;
+            }
+            before[0] = mc.screen;
+            button(argument.get(chosen[0]++)).onPress();
+            return false;
+        });
+        run("штраф отменён, компенсация равна штрафу плюс оставшиеся секунды", () -> {
+            check(fines().feedback().startsWith("Штраф отменён. Возврат 0, компенсация "), fines().feedback());
+            long unpaid = ContractFixtures.unpaid(serverPlayer());
+            check(fines().fines().get(0).overturned() && unpaid >= 25 + 8 && unpaid <= 25 + 15, "К выдаче " + unpaid);
+            REPORT.add(fines().feedback());
+        });
+        shot("appeal-won");
+        press("возврат к заказам и выплатам", "К заказам и выплатам");
+        press("компенсация выдана изумрудами", "Забрать зарплату");
+        run("компенсация получена один раз", () -> check(carried(Items.EMERALD) >= 33
+                && ContractFixtures.unpaid(serverPlayer()) == 0, "Изумрудов " + carried(Items.EMERALD)));
+        shot("compensation-claimed");
+        closeScreen();
+
+        // FR-30, FR-31, FR-150, FR-152: the demolition
+        openForeman();
+        press("экран сносов открыт из диалога", "Сносы");
+        shot("demolition-not-started");
+        press("", "Сдать материалы");
+        run("снос не принимается, пока постройка не разобрана", () -> check(
+                demolitions().feedback().startsWith("Разбери постройку") && ContractFixtures.demolitions(serverPlayer()) == 1,
+                demolitions().feedback()));
+        closeScreen();
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку к недострою");
+        run("", () -> stand(new Vec3(5.5, 65, planks[0].getZ() + 0.5), Vec3.atCenterOf(planks[1])));
+        shot("demolition-on-site");
+        for (int index = 1; index >= 0; index--) {
+            int block = index;
+            step("блок недостроя разобран руками в выживании", 300, () -> {
+                if (mc.level.getBlockState(planks[block]).isAir()) {
+                    return true;
+                }
+                mc.gameMode.continueDestroyBlock(planks[block], net.minecraft.core.Direction.EAST);
+                mc.player.swing(InteractionHand.MAIN_HAND);
+                return false;
+            });
+        }
+        pause(20);
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        run("", () -> command("clear @s minecraft:oak_planks"));
+        openForeman();
+        press("", "Сносы");
+        run("список сдачи равен фактической добыче", () -> {
+            var materials = demolitions().cards().get(0).materials();
+            check(materials.size() == 1 && materials.get(0).label().equals("block.minecraft.oak_planks")
+                    && materials.get(0).needed() == 2, "К сдаче две дубовые доски: " + materials);
+        });
+        shot("demolition-materials");
+        press("", "Сдать материалы");
+        run("без материалов снос не принят", () -> check(demolitions().feedback().startsWith("Принеси все материалы")
+                && ContractFixtures.demolitions(serverPlayer()) == 1, demolitions().feedback()));
+        run("", () -> command("give @s minecraft:oak_planks 3"));
+        press("", "Сдать материалы");
+        run("снос принят, списаны только две доски из запасов", () -> check(demolitions().feedback().equals("Снос принят.")
+                && ContractFixtures.demolitions(serverPlayer()) == 0 && carried(Items.OAK_PLANKS) == 1,
+                demolitions().feedback() + ", досок " + carried(Items.OAK_PLANKS)));
+        shot("demolition-accepted");
+        closeScreen();
+    }
+
+    // Scenario: from the first meeting with the builder to the first wage and a reload
+
+    private static void mainCycle(Minecraft mc) {
+        UUID[] npcs = new UUID[3];
+        enterFreshWorld(mc);
 
         // FR-10, FR-139, FR-173: the builder, refusal and a repeated offer
         step("рядом с игроком появился строитель", 200, () -> npc(BUILDER) != null);
