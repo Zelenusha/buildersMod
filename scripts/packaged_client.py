@@ -32,8 +32,17 @@ def fetch(url, path, expected):
     if os.path.exists(path) and sha1(path) == expected:
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with urllib.request.urlopen(url, timeout=120) as response, open(path, 'wb') as target:
-        target.write(response.read())
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                content = response.read()
+            break
+        except OSError as error:
+            if attempt == 4:
+                sys.exit('Cannot download %s: %s' % (url, error))
+            time.sleep(3)
+    with open(path, 'wb') as target:
+        target.write(content)
     if sha1(path) != expected:
         sys.exit('Checksum mismatch for ' + url)
 
