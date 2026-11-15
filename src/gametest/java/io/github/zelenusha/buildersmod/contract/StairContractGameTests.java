@@ -149,10 +149,11 @@ public final class StairContractGameTests {
             helper.assertTrue(account.highestFloor == 2 && account.active == null && account.special == null
                     && account.rooms.size() == 1 && account.completed == 0,
                     "Only a successful handover opens the next floor and records the special order without counting an ordinary room");
-            helper.assertTrue(account.unpaid == offer.wage() && notices.isEmpty(),
+            helper.assertTrue(account.pendingWage == offer.wage() && notices.isEmpty(),
                     "Repair does not create a late notice and a purchased day excludes the early bonus");
             ContractEvents.submit(player, data, account);
-            helper.assertTrue(account.highestFloor == 2 && account.unpaid == offer.wage(), "The staircase cannot open or pay twice");
+            helper.assertTrue(account.highestFloor == 2 && account.pendingWage == offer.wage(),
+                    "The staircase cannot open or pay twice");
         } finally {
             restore(site, before);
         }

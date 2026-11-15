@@ -75,6 +75,7 @@ public final class ContractData extends SavedData {
         Accepted active;
         StairInspection stairInspection = StairInspection.WAITING;
         int completed;
+        long pendingWage;
         long unpaid;
         FineLedger fines = new FineLedger();
         AppealPuzzle appeal;
@@ -147,6 +148,7 @@ public final class ContractData extends SavedData {
             Account account = data.account(player.getUUID("Player"));
             account.completed = Math.max(0, player.getInt("Completed"));
             account.unpaid = Math.max(0, player.getLong("Unpaid"));
+            account.pendingWage = Math.max(0, player.getLong("PendingWage"));
             account.highestFloor = Math.max(1, Math.min(8, player.getInt("HighestFloor")));
             account.sequence = player.getInt("Sequence");
             account.fines = loadFines(player.getList("Fines", Tag.TAG_COMPOUND));
@@ -357,6 +359,7 @@ public final class ContractData extends SavedData {
             player.putUUID("Player", id);
             player.putInt("Completed", account.completed);
             player.putLong("Unpaid", account.unpaid);
+            player.putLong("PendingWage", account.pendingWage);
             player.putInt("HighestFloor", account.highestFloor);
             player.putInt("Sequence", account.sequence);
             player.put("Fines", saveFines(account.fines));

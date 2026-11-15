@@ -69,16 +69,20 @@ public final class FineLedger {
     }
 
     public int apply(int salary) {
+        return (int) apply((long) salary);
+    }
+
+    long apply(long salary) {
         if (salary < 0) {
             throw new IllegalArgumentException("Negative salary");
         }
-        int remaining = salary;
+        long remaining = salary;
         for (Map.Entry<UUID, Fine> entry : fines.entrySet()) {
             if (remaining == 0) {
                 break;
             }
             Fine fine = entry.getValue();
-            int deduction = Math.min(remaining, fine.outstanding());
+            int deduction = (int) Math.min(remaining, fine.outstanding());
             if (deduction > 0) {
                 entry.setValue(new Fine(fine.id(), fine.amount(), fine.withheld() + deduction, fine.reason(),
                         fine.audacity(), fine.attemptsUsed(), fine.overturned()));

@@ -18,6 +18,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -98,7 +99,7 @@ public class ConstructionFlowGameTests {
             int expectedWage = 6 + 5 + 3;
             helper.assertTrue(account.active == null && account.completed == 1 && account.rooms.size() == 1,
                     "Successful submission records the completed room exactly once");
-            helper.assertTrue(account.unpaid == expectedWage && account.fines.entries().isEmpty(),
+            helper.assertTrue(account.pendingWage == expectedWage && account.unpaid == 0 && account.fines.entries().isEmpty(),
                     "Outstanding wage is six base, five for cakes and three for early submission");
             helper.assertTrue(account.offers[0] == null, "Only the completed order's slot is invalidated");
             for (int slot = 1; slot < account.offers.length; slot++) {
@@ -107,9 +108,10 @@ public class ConstructionFlowGameTests {
 
             ContractData restored = ContractData.load(data.save(new CompoundTag()));
             ContractData.Account afterReload = restored.account(player.getUUID());
-            helper.assertTrue(afterReload.unpaid == expectedWage, "The wage survives saving before collection");
+            helper.assertTrue(afterReload.pendingWage == expectedWage, "The wage survives saving before collection");
             ContractEvents.claim(player, restored, afterReload);
-            helper.assertTrue(afterReload.unpaid == 0 && carriedEmeralds(player) == expectedWage, "Claim transfers the exact wage");
+            helper.assertTrue(afterReload.pendingWage == 0 && afterReload.unpaid == 0 && carriedEmeralds(player) == expectedWage,
+                    "Claim transfers the exact wage");
             ContractEvents.submit(player, restored, afterReload);
             ContractEvents.claim(player, restored, afterReload);
             helper.assertTrue(afterReload.completed == 1 && afterReload.unpaid == 0 && carriedEmeralds(player) == expectedWage,
@@ -117,6 +119,37 @@ public class ConstructionFlowGameTests {
         } finally {
             previous.forEach((pos, state) -> site.setBlock(pos, state, Block.UPDATE_CLIENTS));
         }
+    }
+
+    @GameTest(template = "empty")
+    public static void claimSettlesLateFinesOnceAndKeepsTheUndeliveredPart(GameTestHelper helper) {
+        var data = new ContractData();
+        var player = new FakePlayer(helper.getLevel(), new GameProfile(UUID.randomUUID(), "partial-pay"));
+        var account = data.account(player.getUUID());
+        account.pendingWage = 12;
+        var first = account.fines.issue(4, "Недострой", 1);
+        var inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.items.size(); slot++) {
+            inventory.setItem(slot, new ItemStack(Items.STONE, 64));
+        }
+        inventory.setItem(0, new ItemStack(Items.EMERALD, 61));
+
+        ContractEvents.claim(player, data, account);
+        helper.assertTrue(carriedEmeralds(player) == 64 && account.pendingWage == 0 && account.unpaid == 5,
+                "A fine issued before the first claim leaves eight payable, of which only three fit");
+        helper.assertTrue(account.fines.find(first.id()).withheld() == 4, "The fine is recorded as paid once");
+
+        ContractData loaded = ContractData.load(data.save(new CompoundTag()));
+        var reloaded = loaded.account(player.getUUID());
+        var later = reloaded.fines.issue(3, "Новый штраф", 1);
+        inventory.setItem(1, ItemStack.EMPTY);
+        ContractEvents.claim(player, loaded, reloaded);
+        ContractEvents.claim(player, loaded, reloaded);
+        helper.assertTrue(carriedEmeralds(player) == 69 && reloaded.unpaid == 0,
+                "The remaining five can be collected after reload exactly once");
+        helper.assertTrue(reloaded.fines.find(later.id()).outstanding() == 3,
+                "A later fine remains open until a new wage is settled");
+        helper.succeed();
     }
 
     private static void verifyForemanDetails(GameTestHelper helper, ContractData.Accepted order, RoomBlueprint.BlueprintCheck check) {

@@ -384,7 +384,7 @@ public final class ContractEvents {
             };
             account.fines.issue(5 * audacity, reason, audacity);
         }
-        account.unpaid += account.fines.apply(wage);
+        account.pendingWage += wage;
         account.active = null;
         account.pausedAt = -1;
         account.stairInspection = ContractData.StairInspection.WAITING;
@@ -392,12 +392,22 @@ public final class ContractEvents {
     }
 
     static String claim(ServerPlayer player, ContractData data, ContractData.Account account) {
+        long withheld = 0;
+        if (account.pendingWage > 0) {
+            long net = account.fines.apply(account.pendingWage);
+            withheld = account.pendingWage - net;
+            account.unpaid += net;
+            account.pendingWage = 0;
+            data.setDirty();
+        }
+        var inventory = player.getInventory();
         int received = 0;
         while (account.unpaid > 0) {
             ItemStack payment = new ItemStack(Items.EMERALD, (int) Math.min(64, account.unpaid));
             int offered = payment.getCount();
-            player.getInventory().add(payment);
-            int delivered = offered - payment.getCount();
+            int previous = inventory.countItem(Items.EMERALD);
+            inventory.add(payment);
+            int delivered = inventory.countItem(Items.EMERALD) - previous;
             account.unpaid -= delivered;
             received += delivered;
             if (delivered < offered) {
@@ -406,7 +416,13 @@ public final class ContractEvents {
         }
         if (received > 0) {
             data.setDirty();
+            if (withheld > 0) {
+                return "Выдано " + received + " изумр. · удержано " + withheld + ".";
+            }
             return "Выдано изумрудов: " + received + ".";
+        }
+        if (withheld > 0 && account.unpaid == 0) {
+            return "Зарплата удержана в счёт штрафов: " + withheld + " изумр.";
         }
         return account.unpaid == 0 ? "Начислений к выдаче нет." : "Освободи место в инвентаре.";
     }
@@ -462,7 +478,7 @@ public final class ContractEvents {
         if (incident.kind() == IncidentState.Kind.CLEANUP) {
             GraffitiEvents.remove(site, id);
         }
-        account.unpaid += account.fines.apply(wage.getAsInt());
+        account.pendingWage += wage.getAsInt();
         IncidentWork.finish(player, data, account, incident);
         return "Работа принята. Зарплата у прораба.";
     }
@@ -614,7 +630,7 @@ public final class ContractEvents {
             }
             cards.sort(java.util.Comparator.comparingInt(card -> card.slot() < 0 ? Integer.MAX_VALUE : card.slot()));
         }
-        ContractNetwork.sendPanel(player, new ContractNetwork.Panel(foreman, dialogue, state, account.unpaid,
+        ContractNetwork.sendPanel(player, new ContractNetwork.Panel(foreman, dialogue, state, account.unpaid + account.pendingWage,
                 account.completed, cards, account.failed.size(), account.fines.entries().size(), feedback, account.lastCall,
                 account.incidents.stream().filter(work -> work.kind().pausesConstruction() && account.pausedAt >= 0)
                         .map(work -> work.kind().title).findFirst().orElse("")));

@@ -82,7 +82,7 @@ final class ForemanScreen extends Screen {
             Button accept = action("Принять заказ", ContractNetwork.Action.ACCEPT, card.slot(), x, y + 150, WIDTH - 24);
             accept.active = card.available();
         }
-        Button claim = action("Забрать зарплату: " + panel.unpaid(), ContractNetwork.Action.CLAIM, 0,
+        Button claim = action("Получить выплату · " + panel.unpaid(), ContractNetwork.Action.CLAIM, 0,
                 x, y + 176, 176);
         claim.active = panel.unpaid() > 0;
         Button demolitions = action("Сносы — " + panel.failed(), ContractNetwork.Action.SHOW_DEMOLITIONS, 0,
