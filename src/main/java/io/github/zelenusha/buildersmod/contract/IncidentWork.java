@@ -4,12 +4,17 @@ import io.github.zelenusha.buildersmod.intro.IntroEvents;
 import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint;
 import io.github.zelenusha.buildersmod.maintenance.FireRepair;
 import io.github.zelenusha.buildersmod.maintenance.GraffitiEvents;
+import io.github.zelenusha.buildersmod.maintenance.IncidentEligibility;
 import io.github.zelenusha.buildersmod.maintenance.IncidentState;
 import io.github.zelenusha.buildersmod.maintenance.IncidentWorld;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -61,53 +66,106 @@ public final class IncidentWork {
         var schedule = account.incidentSchedule;
         boolean blocked = blocksEvents(account);
         long before = schedule.nextCheck();
-        if (schedule.roll(now, blocked || account.pendingIncident != null, player.getRandom())) {
-            Offer offer = chooseOffer(account, player.getRandom(), -1);
-            if (offer != null) {
-                // A queued assignment records its type and room before the world is touched.
-                account.pendingIncident = offer;
-            }
+        if (schedule.roll(now, blocked || account.pendingIncidentSeed != null, player.getRandom())
+                && account.rooms.stream().anyMatch(IncidentWork::isOrdinaryRoom)) {
+            account.pendingIncidentSeed = player.getRandom().nextLong();
         }
         if (before != schedule.nextCheck()) {
             data.setDirty();
         }
-        Offer pending = account.pendingIncident;
-        if (pending != null && blocked) {
-            account.pendingIncident = null;
+        Long seed = account.pendingIncidentSeed;
+        if (seed != null && blocked) {
+            account.pendingIncidentSeed = null;
             data.setDirty();
-        } else if (pending != null && player.serverLevel() == site && roomLoaded(site, account, pending.room())) {
-            account.pendingIncident = null;
-            if (!blocked && activate(player, data, account, pending, true)) {
+        } else if (seed != null && player.serverLevel() == site && now % 20 == 0) {
+            WeeklyCandidate result = chooseWeekly(site, account, RandomSource.create(seed));
+            Offer pending = result.offer();
+            if (pending != null && activate(player, data, account, pending, true)) {
+                account.pendingIncidentSeed = null;
                 account.lastCall = call(pending.kind());
                 ContractNetwork.call(player, account.lastCall);
+                data.setDirty();
+            } else if (!result.waitingForChunks()) {
+                account.pendingIncidentSeed = null;
+                data.setDirty();
             }
-            data.setDirty();
         }
     }
 
-    static Offer chooseOffer(ContractData.Account account, RandomSource random, int slot) {
-        var rooms = account.rooms.stream().filter(order -> order.kind() == ContractData.Kind.ROOM
-                || order.kind() == ContractData.Kind.SAMPLE).map(order -> order.blueprint().bounds().min()).distinct().toList();
-        if (rooms.isEmpty()) {
-            return null;
-        }
-        List<IncidentState.Kind> eligibleKinds = new ArrayList<>();
-        for (IncidentState.Kind kind : IncidentState.Kind.values()) {
-            if (rooms.stream().anyMatch(room -> available(account, room, kind))) {
-                eligibleKinds.add(kind);
+    record WeeklyCandidate(Offer offer, boolean waitingForChunks) { }
+
+    static WeeklyCandidate chooseWeekly(ServerLevel site, ContractData.Account account, RandomSource random) {
+        var roomsByKind = new EnumMap<IncidentState.Kind, List<BlockPos>>(IncidentState.Kind.class);
+        boolean waiting = false;
+        for (var order : account.rooms) {
+            if (!isOrdinaryRoom(order) || hasWork(account, order.blueprint().bounds().min())) {
+                continue;
+            }
+            RoomBlueprint room = order.blueprint();
+            BlockPos position = room.bounds().min();
+            if (!IncidentWorld.loaded(site, room.bounds())) {
+                waiting = true;
+                continue;
+            }
+            for (var kind : suitableKinds(site, account, room)) {
+                roomsByKind.computeIfAbsent(kind, ignored -> new ArrayList<>()).add(position);
             }
         }
-        if (eligibleKinds.isEmpty()) {
-            return null;
+        if (roomsByKind.isEmpty()) {
+            return new WeeklyCandidate(null, waiting);
         }
-        IncidentState.Kind kind = eligibleKinds.get(random.nextInt(eligibleKinds.size()));
-        var availableRooms = rooms.stream().filter(room -> available(account, room, kind)).toList();
-        BlockPos room = availableRooms.get(random.nextInt(availableRooms.size()));
+        var kinds = List.copyOf(roomsByKind.keySet());
+        var kind = kinds.get(random.nextInt(kinds.size()));
+        var rooms = roomsByKind.get(kind);
+        return new WeeklyCandidate(newOffer(account, random, -1, rooms.get(random.nextInt(rooms.size())), kind), waiting);
+    }
+
+    static Offer chooseManual(ServerLevel site, ContractData.Account account, RandomSource random, int slot) {
+        var rooms = new ArrayList<>(account.rooms.stream().filter(IncidentWork::isOrdinaryRoom).toList());
+        Collections.shuffle(rooms, new Random(random.nextLong()));
+        for (var order : rooms) {
+            RoomBlueprint room = order.blueprint();
+            BlockPos position = room.bounds().min();
+            if (hasWork(account, position) || alreadyOffered(account, position)) {
+                continue;
+            }
+            var kinds = ContractEvents.withLoadedArea(site, room.bounds(), () -> List.copyOf(suitableKinds(site, account, room)));
+            if (!kinds.isEmpty()) {
+                return newOffer(account, random, slot, position, kinds.get(random.nextInt(kinds.size())));
+            }
+        }
+        return null;
+    }
+
+    private static Set<IncidentState.Kind> suitableKinds(ServerLevel site, ContractData.Account account, RoomBlueprint room) {
+        boolean surviving = account.failedEvictions.containsKey(room.bounds().min());
+        var kinds = IncidentEligibility.kinds(site, room, surviving);
+        return surviving && kinds.contains(IncidentState.Kind.EVICTION) ? Set.of(IncidentState.Kind.EVICTION) : kinds;
+    }
+
+    private static Offer newOffer(ContractData.Account account, RandomSource random, int slot, BlockPos room, IncidentState.Kind kind) {
         return new Offer(UUID.randomUUID(), room, kind, ContractBalance.selectDifficulty(random, account.completed), slot);
     }
 
+    private static boolean isOrdinaryRoom(ContractData.Accepted order) {
+        return order.kind() == ContractData.Kind.ROOM || order.kind() == ContractData.Kind.SAMPLE;
+    }
+
+    private static boolean alreadyOffered(ContractData.Account account, BlockPos room) {
+        for (Offer offer : account.incidentOffers) {
+            if (offer != null && offer.room().equals(room)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasWork(ContractData.Account account, BlockPos room) {
+        return account.incidents.stream().anyMatch(incident -> incident.originRoom().equals(room));
+    }
+
     private static boolean available(ContractData.Account account, BlockPos room, IncidentState.Kind kind) {
-        return account.incidents.stream().noneMatch(incident -> incident.originRoom().equals(room))
+        return !hasWork(account, room)
                 && (kind == IncidentState.Kind.EVICTION || !account.failedEvictions.containsKey(room));
     }
 
@@ -134,6 +192,9 @@ public final class IncidentWork {
             return false;
         }
         var room = room(account, offer.room()).blueprint();
+        if (!suitableKinds(site, account, room).contains(offer.kind())) {
+            return false;
+        }
         var positions = IncidentWorld.interiorCandidates(site, room);
         long seed = player.getRandom().nextLong();
         UUID id = offer.id();

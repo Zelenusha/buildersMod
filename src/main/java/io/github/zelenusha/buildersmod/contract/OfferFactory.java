@@ -59,7 +59,7 @@ final class OfferFactory {
                 continue;
             }
             if (slot >= 3) {
-                var incident = IncidentWork.chooseOffer(account, player.getRandom(), slot);
+                var incident = IncidentWork.chooseManual(site, account, player.getRandom(), slot);
                 if (incident != null && (slot == 3 || player.getRandom().nextBoolean())) {
                     account.incidentOffers[slot - 3] = incident;
                     data.setDirty();

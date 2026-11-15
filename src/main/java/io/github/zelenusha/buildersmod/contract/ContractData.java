@@ -89,7 +89,7 @@ public final class ContractData extends SavedData {
         final List<Accepted> rooms = new ArrayList<>();
         final List<DemolitionWork> failed = new ArrayList<>();
         IncidentState.Schedule incidentSchedule;
-        IncidentWork.Offer pendingIncident;
+        Long pendingIncidentSeed;
         final IncidentWork.Offer[] incidentOffers = new IncidentWork.Offer[2];
         final List<IncidentState> incidents = new ArrayList<>();
         final Map<UUID, Integer> incidentSlots = new HashMap<>();
@@ -278,7 +278,11 @@ public final class ContractData extends SavedData {
         if (player.contains("IncidentSchedule", Tag.TAG_COMPOUND)) {
             account.incidentSchedule = IncidentState.Schedule.load(player.getCompound("IncidentSchedule"));
         }
-        account.pendingIncident = IncidentWork.Offer.load(player.getCompound("PendingIncident"));
+        if (player.contains("PendingIncidentSeed", Tag.TAG_LONG)) {
+            account.pendingIncidentSeed = player.getLong("PendingIncidentSeed");
+        } else if (player.getCompound("PendingIncident").hasUUID("Id")) {
+            account.pendingIncidentSeed = player.getCompound("PendingIncident").getUUID("Id").getLeastSignificantBits();
+        }
         for (int index = 0; index < account.incidentOffers.length; index++) {
             account.incidentOffers[index] = IncidentWork.Offer.load(player.getCompound("IncidentOffer" + index));
         }
@@ -312,8 +316,8 @@ public final class ContractData extends SavedData {
         if (account.incidentSchedule != null) {
             player.put("IncidentSchedule", account.incidentSchedule.save());
         }
-        if (account.pendingIncident != null) {
-            player.put("PendingIncident", account.pendingIncident.save());
+        if (account.pendingIncidentSeed != null) {
+            player.putLong("PendingIncidentSeed", account.pendingIncidentSeed);
         }
         for (int index = 0; index < account.incidentOffers.length; index++) {
             if (account.incidentOffers[index] != null) {
