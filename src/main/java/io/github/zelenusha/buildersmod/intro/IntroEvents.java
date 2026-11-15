@@ -12,6 +12,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
@@ -113,6 +114,11 @@ public final class IntroEvents {
         }
         IntroData.Work work = IntroData.get(player.server).work(player.getUUID());
         ServerLevel overworld = player.server.overworld();
+        if (player.serverLevel() == overworld && player.isAlive()) {
+            facePlayer(overworld, work.builder, player);
+            facePlayer(overworld, work.foreman, player);
+            facePlayer(overworld, work.trader, player);
+        }
         boolean trading = player.containerMenu instanceof MerchantMenu;
         if (trading) {
             closeTradeIfTooFar(player, overworld, work.builder);
@@ -122,6 +128,26 @@ public final class IntroEvents {
                 && overworld.getEntity(work.trader) instanceof WanderingTrader trader) {
             IntroTrades.updateTrader(overworld, work.dugout, trader, day(overworld));
         }
+    }
+
+    private static void facePlayer(ServerLevel level, UUID npcId, ServerPlayer player) {
+        if (npcId == null || !(level.getEntity(npcId) instanceof AbstractVillager npc) || !npc.isAlive()
+                || player.distanceToSqr(npc) > 64) {
+            return;
+        }
+        double dx = player.getX() - npc.getX();
+        double dz = player.getZ() - npc.getZ();
+        double distance = Math.hypot(dx, dz);
+        if (distance < 0.01) {
+            return;
+        }
+        double dy = player.getEyeY() - npc.getEyeY();
+        float yaw = Mth.wrapDegrees((float) (Math.toDegrees(Mth.atan2(dz, dx)) - 90));
+        float pitch = Mth.clamp((float) -Math.toDegrees(Mth.atan2(dy, distance)), -35, 35);
+        npc.setYRot(yaw);
+        npc.setYBodyRot(yaw);
+        npc.setYHeadRot(yaw);
+        npc.setXRot(pitch);
     }
 
     private static void closeTradeIfTooFar(ServerPlayer player, ServerLevel overworld, UUID merchantId) {

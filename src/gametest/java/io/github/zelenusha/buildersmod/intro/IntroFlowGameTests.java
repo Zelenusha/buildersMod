@@ -19,6 +19,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.FakePlayer;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.gametest.GameTestHolder;
@@ -83,6 +84,7 @@ public class IntroFlowGameTests {
             helper.assertTrue(data.firstOffersDay(owner) == Math.floorDiv(level.getDayTime(), 24_000L) + 1,
                     "First offers unlock the next game day");
             helper.assertTrue(execute(player, "accept") == 0, "The accepted offer cannot be taken again");
+            checkOfficeStaffFacesPlayer(helper, player, (Villager) foreman);
 
             IntroData loaded = IntroData.load(data.save(new CompoundTag()));
             IntroData.Work loadedWork = loaded.work(owner);
@@ -95,6 +97,23 @@ public class IntroFlowGameTests {
             data.unprotect(protectedDirt);
         }
         helper.succeed();
+    }
+
+    private static void checkOfficeStaffFacesPlayer(GameTestHelper helper, FakePlayer player, Villager foreman) {
+        double y = foreman.getY();
+        double z = foreman.getZ();
+        player.moveTo(foreman.getX() + 2, y, z, 0, 0);
+        MinecraftForge.EVENT_BUS.post(new TickEvent.PlayerTickEvent(TickEvent.Phase.END, player));
+        helper.assertTrue(foreman.getYRot() == -90 && foreman.getYHeadRot() == -90 && foreman.yBodyRot == -90,
+                "The foreman's head and body face the player approaching from the east");
+        player.moveTo(foreman.getX() - 2, y, z, 0, 0);
+        MinecraftForge.EVENT_BUS.post(new TickEvent.PlayerTickEvent(TickEvent.Phase.END, player));
+        helper.assertTrue(foreman.getYRot() == 90 && foreman.getYHeadRot() == 90 && foreman.yBodyRot == 90,
+                "Approaching from the west turns the foreman in the opposite direction");
+        player.moveTo(foreman.getX() + 10, y, z, 0, 0);
+        MinecraftForge.EVENT_BUS.post(new TickEvent.PlayerTickEvent(TickEvent.Phase.END, player));
+        helper.assertTrue(foreman.getYRot() == 90 && foreman.getYHeadRot() == 90,
+                "Distant players do not change the foreman's direction");
     }
 
     @GameTest(template = "empty")
