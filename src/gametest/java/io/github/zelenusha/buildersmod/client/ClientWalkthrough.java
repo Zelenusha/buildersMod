@@ -117,6 +117,7 @@ public final class ClientWalkthrough {
                 case "main" -> mainCycle(mc);
                 case "fines" -> finesAndDemolition(mc);
                 case "incidents" -> floodAndCleanup(mc);
+                case "hazards" -> fireAndEviction(mc);
                 default -> throw new IllegalArgumentException("Неизвестный сценарий " + SCENARIO);
             }
         }
@@ -462,6 +463,220 @@ public final class ClientWalkthrough {
         screen.mouseClicked(left + 2.5 * scale, y, 0);
         screen.mouseDragged(left + (GraffitiPattern.CANVAS_WIDTH - 2.5) * scale, y, 0, 0, 0);
         screen.mouseReleased(left + (GraffitiPattern.CANVAS_WIDTH - 2.5) * scale, y, 0);
+    }
+
+    private static List<BlockPos> flames() {
+        return onServer(() -> {
+            ServerLevel site = server().getLevel(ConstructionSite.SITE_LEVEL);
+            RoomBlueprint.Bounds bounds = ContractFixtures.firstRoom(serverPlayer()).bounds();
+            List<BlockPos> burning = new ArrayList<>();
+            for (BlockPos pos : BlockPos.betweenClosed(bounds.min().offset(-2, 0, -2), bounds.max().offset(2, 2, 2))) {
+                if (site.getBlockState(pos).is(net.minecraft.tags.BlockTags.FIRE)) {
+                    burning.add(pos.immutable());
+                }
+            }
+            return burning;
+        });
+    }
+
+    // Scenario: an automatic fire put out by hand and with the extinguisher, then an eviction lost and repeated
+
+    private static void fireAndEviction(Minecraft mc) {
+        BlockPos[] origin = new BlockPos[1];
+        BlockPos[] second = new BlockPos[1];
+        BlockPos[] burned = new BlockPos[1];
+        UUID[] resident = new UUID[1];
+        firstRoom(mc);
+        run("", () -> command("gamerule keepInventory true"));
+
+        // FR-35, FR-59, FR-60: fire
+        run("", () -> onServer(() -> {
+            ContractFixtures.queueIncident(serverPlayer(), IncidentState.Kind.FIRE);
+            return null;
+        }));
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку");
+        step("на стройке начался пожар и прораб позвонил", 200,
+                () -> ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FIRE) != null && ContractClient.callTicks > 0);
+        run("пожар начинается с одного блока огня, огонь перекинулся на соседнюю клетку", () -> onServer(() -> {
+            ServerLevel site = serverPlayer().serverLevel();
+            RoomBlueprint room = ContractFixtures.firstRoom(serverPlayer());
+            var fire = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FIRE);
+            check(fire.initialBlocks().size() == 1 && ContractFixtures.lastCall(serverPlayer()).contains("пожар"),
+                    "Один начальный блок огня и звонок о пожаре");
+            origin[0] = fire.initialBlocks().get(0);
+            for (Direction side : Direction.Plane.HORIZONTAL) {
+                BlockPos pos = origin[0].relative(side);
+                var flame = net.minecraft.world.level.block.BaseFireBlock.getState(site, pos);
+                if (room.containsInterior(pos) && site.isEmptyBlock(pos) && flame.canSurvive(site, pos)) {
+                    site.setBlock(pos, flame, Block.UPDATE_ALL);
+                    second[0] = pos;
+                    break;
+                }
+            }
+            check(second[0] != null, "Рядом с очагом есть место для второго огня");
+            return null;
+        }));
+        run("", () -> stand(beside(origin[0]), Vec3.atCenterOf(origin[0])));
+        pause(5);
+        shot("fire");
+        run("", () -> mc.gameMode.startDestroyBlock(second[0], Direction.UP));
+        step("огонь сбит рукой", 60, () -> !flames().contains(second[0]));
+        run("", () -> {
+            hold(4, "buildersmod:fire_extinguisher");
+            if (flames().contains(origin[0])) {
+                useOn(origin[0], Direction.UP);
+            } else {
+                // The first flame can die on bare stone before the player reaches it.
+                useOn(flames().get(0), Direction.UP);
+            }
+        });
+        step("огнетушитель потушил очаг и израсходовал одно применение", 60, () -> onServer(() -> serverPlayer()
+                .getInventory().getItem(4).getDamageValue()) == 1 && !flames().contains(origin[0]));
+        step("огня на стройке не осталось", 400, () -> {
+            List<BlockPos> burning = flames();
+            if (burning.isEmpty()) {
+                return true;
+            }
+            Vec3 spot;
+            try {
+                spot = beside(burning.get(0));
+            } catch (RuntimeException outsideTheRoom) {
+                spot = Vec3.atBottomCenterOf(burning.get(0).east());
+            }
+            stand(spot, Vec3.atCenterOf(burning.get(0)));
+            mc.gameMode.startDestroyBlock(burning.get(0), Direction.UP);
+            return false;
+        });
+        run("после пожара в стене не хватает блока", () -> onServer(() -> {
+            ServerLevel site = serverPlayer().serverLevel();
+            RoomBlueprint room = ContractFixtures.firstRoom(serverPlayer());
+            // Whatever the fire really burned is rebuilt by the scene, one wall block is left for the refusal check.
+            room.requirements().forEach((pos, requirement) -> site.setBlock(pos, requirement.expectedState(), PLACE));
+            burned[0] = room.requirements().entrySet().stream().filter(entry -> entry.getValue().criterion() == Criterion.WALLS
+                    && entry.getKey().getY() == room.interior().min().getY() + 1).findFirst().orElseThrow().getKey();
+            site.removeBlock(burned[0], false);
+            return null;
+        }));
+        run("", () -> stand(beside(burned[0]), Vec3.atCenterOf(burned[0])));
+        pause(5);
+        shot("fire-damage");
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        openForeman();
+        press("", "Открыть заказы");
+        card("");
+        press("", "Сдать работу");
+        run("пожар не сдан, пока комната не восстановлена по чертежу", () -> check(
+                panel().feedback().startsWith("Работа пока не готова")
+                        && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FIRE) != null, panel().feedback()));
+        shot("fire-not-repaired");
+        run("стена восстановлена", () -> onServer(() -> {
+            RoomBlueprint room = ContractFixtures.firstRoom(serverPlayer());
+            server().getLevel(ConstructionSite.SITE_LEVEL).setBlock(burned[0],
+                    room.requirements().get(burned[0]).expectedState(), PLACE);
+            return null;
+        }));
+        card("");
+        press("тушение с ремонтом сдано прорабу", "Сдать работу");
+        run("пожар оплачен по уровню", () -> check(panel().feedback().startsWith("Работа принята")
+                && ContractFixtures.unpaid(serverPlayer()) == 5
+                && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FIRE) == null, panel().feedback()));
+        press("", "Забрать зарплату");
+
+        // FR-34, FR-178: eviction
+        run("", () -> onServer(() -> {
+            ContractFixtures.offerIncident(serverPlayer(), IncidentState.Kind.EVICTION);
+            return null;
+        }));
+        closeScreen();
+        openForeman();
+        press("", "Открыть заказы");
+        card("4");
+        shot("eviction-offer");
+        press("выселение принято у прораба", "Принять заказ");
+        run("на первом уровне одна цель выселения", () -> {
+            var targets = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION).remainingEvictionTargets();
+            check(targets.size() == 1, "Целей: " + targets.size());
+            resident[0] = targets.get(0);
+        });
+        card("4");
+        press("", "Сдать работу");
+        run("пока цель жива, выселение не сдаётся", () -> check(panel().feedback().startsWith("Работа пока не готова"),
+                panel().feedback()));
+        closeScreen();
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку");
+        step("жилец находится в комнате", 200, () -> onServer(() -> serverPlayer().serverLevel().getEntity(resident[0])) != null);
+        run("", () -> {
+            Entity target = onServer(() -> serverPlayer().serverLevel().getEntity(resident[0]));
+            command("effect give @s minecraft:resistance 600 4 true");
+            stand(beside(target.blockPosition()), target.getEyePosition());
+        });
+        pause(5);
+        shot("eviction-resident");
+        long[] unpaid = new long[1];
+        run("", () -> {
+            unpaid[0] = ContractFixtures.unpaid(serverPlayer());
+            command("effect clear @s");
+            command("kill @s");
+        });
+        step("игрок погиб", 100, () -> mc.screen instanceof net.minecraft.client.gui.screens.DeathScreen);
+        shot("eviction-player-died");
+        run("", () -> mc.player.respawn());
+        step("игрок возродился в обычном мире", 300, () -> mc.player != null && mc.player.isAlive() && mc.screen == null
+                && mc.level.dimension() == Level.OVERWORLD && serverPlayer() != null);
+        pause(40);
+        run("гибель игрока проваливает выселение без оплаты, жилец остаётся", () -> {
+            check(ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION) == null
+                    && ContractFixtures.unpaid(serverPlayer()) == unpaid[0], "Задание снято, зарплаты нет");
+            check(onServer(() -> ContractFixtures.account(serverPlayer())) != null, "Счёт игрока на месте");
+        });
+        run("", () -> onServer(() -> {
+            ContractFixtures.offerIncident(serverPlayer(), IncidentState.Kind.EVICTION);
+            return null;
+        }));
+        openForeman();
+        press("", "Открыть заказы");
+        card("4");
+        press("повторное выселение принято", "Принять заказ");
+        run("повторный заказ называет того же выжившего жильца", () -> {
+            var targets = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION).remainingEvictionTargets();
+            check(targets.equals(List.of(resident[0])), "Цель — прежний жилец");
+        });
+        closeScreen();
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку");
+        step("", 200, () -> onServer(() -> serverPlayer().serverLevel().getEntity(resident[0])) != null);
+        run("", () -> {
+            command("effect give @s minecraft:resistance 600 4 true");
+            command("effect give @s minecraft:strength 600 4 true");
+            hold(5, "minecraft:iron_sword");
+        });
+        int[] cooldown = new int[1];
+        step("жилец выселен в бою", 800, () -> {
+            Entity target = onServer(() -> serverPlayer().serverLevel().getEntity(resident[0]));
+            if (target == null || !target.isAlive()) {
+                return ContractFixtures.incident(serverPlayer(), IncidentState.Kind.EVICTION).remainingEvictionTargets().isEmpty();
+            }
+            if (cooldown[0]-- > 0) {
+                return false;
+            }
+            stand(beside(target.blockPosition()), target.getEyePosition());
+            for (Entity seen : mc.level.entitiesForRendering()) {
+                if (seen.getUUID().equals(resident[0])) {
+                    mc.gameMode.attack(mc.player, seen);
+                    mc.player.swing(InteractionHand.MAIN_HAND);
+                }
+            }
+            cooldown[0] = 14;
+            return false;
+        });
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        openForeman();
+        press("", "Открыть заказы");
+        card("4");
+        press("выселение сдано прорабу", "Сдать работу");
+        run("выселение оплачено после гибели цели", () -> check(panel().feedback().startsWith("Работа принята")
+                && ContractFixtures.unpaid(serverPlayer()) == unpaid[0] + 5, panel().feedback()));
+        shot("eviction-paid");
+        closeScreen();
     }
 
     // Scenario: an automatic flood with the foreman's call and a paused room, then a voluntary cleanup
