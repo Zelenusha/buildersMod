@@ -43,7 +43,7 @@ public final class ContractClient {
     private static List<String> tasks = List.of();
     private static boolean paused;
     private static String call;
-    private static int callTicks;
+    static int callTicks;
     private static final ResourceLocation FOREMAN_HEAD = ResourceLocation.withDefaultNamespace("textures/entity/villager/villager.png");
 
     private ContractClient() { }

@@ -22,9 +22,9 @@ import java.util.UUID;
 
 @Mod.EventBusSubscriber(modid = BuildersMod.MOD_ID, value = Dist.CLIENT)
 public final class GraffitiClient {
-    private static final Map<UUID, Marker> MARKERS = new HashMap<>();
+    static final Map<UUID, Marker> MARKERS = new HashMap<>();
 
-    private record Marker(BlockPos pos, Direction face, BitSet erased) {}
+    record Marker(BlockPos pos, Direction face, BitSet erased) {}
 
     private GraffitiClient() { }
 

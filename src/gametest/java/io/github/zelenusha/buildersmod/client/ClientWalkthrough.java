@@ -7,6 +7,10 @@ import io.github.zelenusha.buildersmod.blueprint.RoomBlueprint.Criterion;
 import io.github.zelenusha.buildersmod.contract.ContractFixtures;
 import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.intro.IntroData;
+import io.github.zelenusha.buildersmod.maintenance.GraffitiPattern;
+import io.github.zelenusha.buildersmod.maintenance.IncidentState;
+import io.github.zelenusha.buildersmod.maintenance.IncidentWorld;
+import io.github.zelenusha.buildersmod.maintenance.WorkItems;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.io.File;
 import java.io.IOException;
@@ -31,6 +35,7 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.inventory.MerchantScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundSelectTradePacket;
 import net.minecraft.server.level.ServerLevel;
@@ -53,6 +58,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
@@ -110,6 +116,7 @@ public final class ClientWalkthrough {
             switch (SCENARIO) {
                 case "main" -> mainCycle(mc);
                 case "fines" -> finesAndDemolition(mc);
+                case "incidents" -> floodAndCleanup(mc);
                 default -> throw new IllegalArgumentException("Неизвестный сценарий " + SCENARIO);
             }
         }
@@ -372,6 +379,333 @@ public final class ClientWalkthrough {
     private static ContractNetwork.DemolitionPanel demolitions() {
         check(mc().screen instanceof DemolitionScreen, "Открыт экран сносов");
         return ((DemolitionScreen) mc().screen).panel;
+    }
+
+    private static void reloadWorld(Minecraft mc) {
+        run("мир сохранён и закрыт", () -> {
+            mc.level.disconnect();
+            mc.clearLevel(new GenericDirtMessageScreen(Component.translatable("menu.savingLevel")));
+            mc.setScreen(new TitleScreen());
+        });
+        pause(20);
+        run("", () -> mc.createWorldOpenFlows().loadLevel(mc.screen, WORLD));
+        step("мир открыт повторно", 2400, () -> {
+            dismissWorldWarning();
+            return mc.player != null && mc.level != null && mc.screen == null && server() != null && serverPlayer() != null;
+        });
+        pause(60);
+    }
+
+    /** Hires the player and credits the reference room, so that the site has a room where incidents can happen. */
+    private static void firstRoom(Minecraft mc) {
+        hire(mc);
+        openForeman();
+        press("", "Открыть заказы");
+        press("пробная комната принята", "Принять заказ");
+        run("пробная комната построена", () -> onServer(() -> {
+            ServerLevel site = server().getLevel(ConstructionSite.SITE_LEVEL);
+            ContractFixtures.activeBlueprint(serverPlayer()).requirements()
+                    .forEach((pos, requirement) -> site.setBlock(pos, requirement.expectedState(), PLACE));
+            serverPlayer().getRandom().setSeed(1L);
+            return null;
+        }));
+        press("пробная комната зачтена", "Сдать");
+        press("", "Забрать зарплату");
+        closeScreen();
+    }
+
+    private static void useOn(BlockPos pos, Direction face) {
+        Vec3 hit = Vec3.atCenterOf(pos).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+        // Sneak for the click so that a workbench under the cursor does not open instead of the held item being used.
+        var sneak = net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.PRESS_SHIFT_KEY;
+        var stand = net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.RELEASE_SHIFT_KEY;
+        mc().getConnection().send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(mc().player, sneak));
+        mc().gameMode.useItemOn(mc().player, InteractionHand.MAIN_HAND, new BlockHitResult(hit, face, pos, false));
+        mc().getConnection().send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(mc().player, stand));
+    }
+
+    private static void hold(int hotbar, String item) {
+        command("item replace entity @s hotbar." + hotbar + " with " + item);
+        mc().player.getInventory().selected = hotbar;
+    }
+
+    /** A free spot on the room floor near the target, from which the player can reach it. */
+    private static Vec3 beside(BlockPos target) {
+        return onServer(() -> {
+            ServerLevel site = serverPlayer().serverLevel();
+            RoomBlueprint room = ContractFixtures.firstRoom(serverPlayer());
+            int floor = room.interior().min().getY();
+            for (int[] offset : new int[][] {{2, 0}, {-2, 0}, {0, 2}, {0, -2}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}}) {
+                BlockPos feet = new BlockPos(target.getX() + offset[0], floor, target.getZ() + offset[1]);
+                if (room.containsInterior(feet) && site.getBlockState(feet).getCollisionShape(site, feet).isEmpty()
+                        && site.getBlockState(feet.above()).getCollisionShape(site, feet.above()).isEmpty()) {
+                    return Vec3.atBottomCenterOf(feet);
+                }
+            }
+            throw new AssertionError("Нет свободного места рядом с " + target);
+        });
+    }
+
+    /** Selects a card by its tab label, or the separate cards when the label is empty. */
+    private static void card(String tab) {
+        run("", () -> button(tab.isEmpty() ? "Отдельные заказы" : tab).onPress());
+    }
+
+    private static void scrubBand(int band) {
+        Screen screen = mc().screen;
+        check(screen instanceof GraffitiScreen, "Открыта мини-игра отмывания");
+        int scale = Math.max(1, Math.min((screen.width - 32) / GraffitiPattern.CANVAS_WIDTH,
+                (screen.height - 76) / GraffitiPattern.CANVAS_HEIGHT));
+        int left = (screen.width - GraffitiPattern.CANVAS_WIDTH * scale) / 2;
+        int top = (screen.height - GraffitiPattern.CANVAS_HEIGHT * scale) / 2;
+        double y = top + (band * 3 + 1.5) * GraffitiPattern.CELL * scale;
+        screen.mouseClicked(left + 2.5 * scale, y, 0);
+        screen.mouseDragged(left + (GraffitiPattern.CANVAS_WIDTH - 2.5) * scale, y, 0, 0, 0);
+        screen.mouseReleased(left + (GraffitiPattern.CANVAS_WIDTH - 2.5) * scale, y, 0);
+    }
+
+    // Scenario: an automatic flood with the foreman's call and a paused room, then a voluntary cleanup
+
+    private static void floodAndCleanup(Minecraft mc) {
+        BlockPos[] source = new BlockPos[1];
+        int[] floor = new int[1];
+        long[] frozen = new long[1];
+        firstRoom(mc);
+
+        // FR-42, FR-43, FR-41: the event arrives as a call and pauses the room in progress
+        openForeman();
+        press("", "Открыть заказы");
+        card("2");
+        press("вторая комната принята в работу", "Принять заказ");
+        closeScreen();
+        run("событие потопа ждёт загрузки стройки", () -> onServer(() -> {
+            ContractFixtures.queueIncident(serverPlayer(), IncidentState.Kind.FLOOD);
+            return null;
+        }));
+        pause(40);
+        run("вне стройки событие не запускается", () -> check(
+                ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD) == null && ContractClient.callTicks == 0,
+                "Пока игрок в офисе, потопа и звонка нет"));
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку");
+        step("на стройке событие запустилось и прораб позвонил", 200,
+                () -> ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD) != null && ContractClient.callTicks > 0);
+        run("стройка встала на паузу, звонок сохранён", () -> {
+            check(ContractFixtures.paused(serverPlayer()), "Обычная комната на паузе");
+            check(ContractFixtures.lastCall(serverPlayer()).contains("сантехник"), ContractFixtures.lastCall(serverPlayer()));
+            REPORT.add("Звонок: " + ContractFixtures.lastCall(serverPlayer()));
+        });
+        shot("call-and-paused-room");
+        int[] shown = new int[1];
+        run("", () -> {
+            shown[0] = ContractClient.callTicks;
+            mc.setScreen(new net.minecraft.client.gui.screens.inventory.InventoryScreen(mc.player));
+        });
+        pause(60);
+        run("пока открыто меню, время показа звонка не идёт", () -> check(ContractClient.callTicks == shown[0],
+                "Осталось " + ContractClient.callTicks + " из " + shown[0]));
+        closeScreen();
+        step("звонок исчезает после восьми секунд игрового экрана", 220, () -> ContractClient.callTicks == 0);
+
+        // FR-36: displace the water, try to submit, remove the temporary blocks
+        run("", () -> onServer(() -> {
+            source[0] = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD).initialBlocks().get(0);
+            floor[0] = ContractFixtures.firstRoom(serverPlayer()).interior().min().getY();
+            return null;
+        }));
+        run("", () -> {
+            Vec3 spot = beside(source[0]);
+            stand(spot, Vec3.atCenterOf(source[0]));
+            hold(3, "minecraft:dirt 8");
+        });
+        pause(10);
+        shot("flood");
+        int[] next = new int[1];
+        int[] wait = new int[1];
+        step("источник воды вытеснен блоками", 300, () -> {
+            if (wait[0]-- > 0) {
+                return false;
+            }
+            int y = floor[0] + next[0];
+            if (y > source[0].getY()) {
+                return true;
+            }
+            useOn(new BlockPos(source[0].getX(), y - 1, source[0].getZ()), Direction.UP);
+            next[0]++;
+            wait[0] = 6;
+            return false;
+        });
+        step("вода ушла из комнаты", 1200, () -> onServer(() -> IncidentWorld.roomHasNoWater(serverPlayer().serverLevel(),
+                ContractFixtures.firstRoom(serverPlayer()))));
+        run("временные блоки учтены в задании", () -> {
+            var fill = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD).floodFill();
+            // Furniture under the source already displaces water, so the column may be shorter than its height.
+            check(fill.contains(source[0]) && fill.stream().allMatch(pos -> pos.getX() == source[0].getX()
+                    && pos.getZ() == source[0].getZ() && pos.getY() >= floor[0]), "Учтены блоки колонны: " + fill);
+            REPORT.add("Источник " + source[0].toShortString() + ", временных блоков " + fill.size());
+        });
+        shot("flood-displaced");
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        openForeman();
+        press("", "Открыть заказы");
+        run("карточка комнаты показывает паузу и её причину", () -> {
+            check(panel().pauseReason().equals("Осушение"), "Причина паузы: " + panel().pauseReason());
+            frozen[0] = panel().cards().stream().filter(entry -> entry.slot() == 1).findFirst().orElseThrow().remaining();
+        });
+        shot("room-card-paused");
+        card("");
+        shot("flood-card");
+        press("", "Сдать работу");
+        run("осушение не принято, пока стоят временные блоки", () -> check(panel().feedback().startsWith("Работа пока не готова")
+                && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD) != null, panel().feedback()));
+        closeScreen();
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "возврат на стройку");
+        run("", () -> stand(beside(source[0]), Vec3.atCenterOf(source[0])));
+        pause(10);
+        step("временные блоки убраны руками", 800, () -> {
+            List<BlockPos> fill = onServer(() -> ContractFixtures.incident(serverPlayer(), IncidentState.Kind.FLOOD)
+                    .floodFill().stream().sorted(java.util.Comparator.comparingInt(pos -> -pos.getY())).toList());
+            for (BlockPos pos : fill) {
+                if (!mc.level.getBlockState(pos).isAir()) {
+                    mc.gameMode.continueDestroyBlock(pos, Direction.UP);
+                    mc.player.swing(InteractionHand.MAIN_HAND);
+                    return false;
+                }
+            }
+            return true;
+        });
+        pause(10);
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        openForeman();
+        press("", "Открыть заказы");
+        card("");
+        press("осушение сдано прорабу", "Сдать работу");
+        run("работа оплачена по уровню, стройка возобновилась с прежним остатком", () -> {
+            check(panel().feedback().startsWith("Работа принята") && ContractFixtures.unpaid(serverPlayer()) == 5,
+                    panel().feedback() + ", к выдаче " + ContractFixtures.unpaid(serverPlayer()));
+            check(!ContractFixtures.paused(serverPlayer()) && panel().pauseReason().isEmpty(), "Пауза снята");
+            long remaining = panel().cards().stream().filter(entry -> entry.slot() == 1).findFirst().orElseThrow().remaining();
+            check(Math.abs(remaining - frozen[0]) < 200, "Остаток срока " + remaining + " после паузы " + frozen[0]);
+        });
+        shot("flood-paid-room-resumed");
+
+        // FR-33, FR-39, FR-40, FR-45: a voluntary cleanup beside the room in progress
+        run("", () -> onServer(() -> {
+            ContractFixtures.offerIncident(serverPlayer(), IncidentState.Kind.CLEANUP);
+            return null;
+        }));
+        press("", "Забрать зарплату");
+        card("4");
+        run("очистку можно принять дополнительно", () -> {
+            var cleanup = panel().cards().stream().filter(entry -> entry.slot() == 3).findFirst().orElseThrow();
+            check(cleanup.title().equals("Очистка комнаты") && cleanup.canParallel() && cleanup.remaining() < 0
+                    && cleanup.wage() == 5, "Очистка без срока за 5 изумрудов");
+        });
+        shot("cleanup-offer");
+        press("очистка принята при активной стройке", "Принять заказ");
+        run("стройка продолжается без паузы", () -> check(!ContractFixtures.paused(serverPlayer())
+                && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP) != null
+                && ContractFixtures.activeBlueprint(serverPlayer()) != null, "Оба заказа активны"));
+        closeScreen();
+        run("", () -> stand(at(office, 4.5, 1, 2.5), at(office, 3.5, 2.6, 3.5)));
+        pause(10);
+        run("", () -> interact(BUILDER));
+        step("", 100, () -> mc.screen instanceof MerchantScreen);
+        run("", () -> {
+            MerchantMenu menu = ((MerchantScreen) mc.screen).getMenu();
+            check(menu.getOffers().get(10).getBaseCostA().getCount() == 2, "Мокрая тряпка стоит 2 изумруда");
+            menu.setSelectionHint(10);
+            menu.tryMoveItems(10);
+            mc.getConnection().send(new ServerboundSelectTradePacket(10));
+        });
+        pause(6);
+        run("", () -> {
+            int menu = ((MerchantScreen) mc.screen).getMenu().containerId;
+            mc.gameMode.handleInventoryMouseClick(menu, 2, 0, ClickType.PICKUP, mc.player);
+            mc.gameMode.handleInventoryMouseClick(menu, 31, 0, ClickType.PICKUP, mc.player);
+        });
+        pause(6);
+        closeScreen();
+        step("мокрая тряпка куплена у строителя", 60, () -> onServer(() -> serverPlayer().getInventory().getItem(1)
+                .is(WorkItems.WET_RAG.get())));
+        enterPortal(() -> at(office, 8.5, 1, 8.5), ConstructionSite.SITE_LEVEL, "переход на стройку");
+        run("", () -> {
+            List<BlockPos> webs = ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP).initialBlocks();
+            check(!webs.isEmpty() && webs.size() <= 2, "На первом уровне до двух паутин");
+            stand(beside(webs.get(0)), Vec3.atCenterOf(webs.get(0)));
+            hold(2, "minecraft:stone_sword");
+        });
+        pause(10);
+        shot("cleanup-cobwebs-and-graffiti");
+        BlockPos[] reached = new BlockPos[1];
+        step("паутина убрана", 600, () -> {
+            for (BlockPos web : ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP).initialBlocks()) {
+                if (!mc.level.getBlockState(web).isAir()) {
+                    if (!web.equals(reached[0])) {
+                        reached[0] = web;
+                        stand(beside(web), Vec3.atCenterOf(web));
+                        return false;
+                    }
+                    mc.gameMode.continueDestroyBlock(web, Direction.UP);
+                    mc.player.swing(InteractionHand.MAIN_HAND);
+                    return false;
+                }
+            }
+            return true;
+        });
+        run("", () -> {
+            var marker = GraffitiClient.MARKERS.values().iterator().next();
+            stand(beside(marker.pos().relative(marker.face())), Vec3.atCenterOf(marker.pos()));
+            mc.player.getInventory().selected = 1;
+        });
+        pause(10);
+        shot("graffiti-on-wall");
+        run("", () -> {
+            var marker = GraffitiClient.MARKERS.values().iterator().next();
+            useOn(marker.pos(), marker.face());
+        });
+        step("правый клик тряпкой открывает отмывание", 100, () -> mc.screen instanceof GraffitiScreen);
+        shot("graffiti-start");
+        run("", () -> scrubBand(0));
+        step("стёрта верхняя часть рисунка", 100, () -> ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP)
+                .erasedPatches().cardinality() == 15);
+        shot("graffiti-partial");
+        closeScreen();
+        run("прерванная попытка израсходовала одну единицу тряпки", () -> check(onServer(() -> serverPlayer().getInventory()
+                .getItem(1).getDamageValue()) == 1, "Прочность тряпки уменьшилась на 1"));
+        pause(10);
+        run("", () -> {
+            var marker = GraffitiClient.MARKERS.values().iterator().next();
+            useOn(marker.pos(), marker.face());
+        });
+        step("при повторном открытии рисунок сохранил стёртое", 100, () -> mc.screen instanceof GraffitiScreen);
+        shot("graffiti-reopened");
+        run("", () -> scrubBand(1));
+        pause(5);
+        run("", () -> scrubBand(2));
+        step("рисунок отмыт полностью, мини-игра закрылась", 200, () -> mc.screen == null
+                && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP).erasedPatches().cardinality()
+                == GraffitiPattern.PATCH_COUNT && GraffitiClient.MARKERS.isEmpty());
+        run("вторая попытка израсходовала вторую единицу тряпки", () -> check(onServer(() -> serverPlayer().getInventory()
+                .getItem(1).getDamageValue()) == 2, "Прочность тряпки уменьшилась на 2"));
+        shot("graffiti-clean-wall");
+        enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис");
+        openForeman();
+        press("", "Открыть заказы");
+        card("4");
+        press("очистка сдана прорабу", "Сдать работу");
+        run("очистка оплачена, комната по-прежнему в работе", () -> check(panel().feedback().startsWith("Работа принята")
+                && ContractFixtures.unpaid(serverPlayer()) == 5 && ContractFixtures.activeBlueprint(serverPlayer()) != null
+                && ContractFixtures.incident(serverPlayer(), IncidentState.Kind.CLEANUP) == null, panel().feedback()));
+        shot("cleanup-paid");
+        closeScreen();
+
+        // FR-42: the last call survives a restart
+        reloadWorld(mc);
+        openForeman();
+        run("последний звонок доступен у прораба после перезапуска", () -> check(panel().lastCall().contains("сантехник"),
+                "Последний звонок: " + panel().lastCall()));
+        shot("last-call-after-reload");
+        closeScreen();
     }
 
     // Scenario: a cancelled room, its fine, a lost and a won appeal, the compensation and the demolition
@@ -802,18 +1136,7 @@ public final class ClientWalkthrough {
         enterPortal(() -> new Vec3(2.5, 65, -2.5), Level.OVERWORLD, "возврат в офис перед сохранением");
 
         // FR-66, FR-148: reload
-        run("мир сохранён и закрыт", () -> {
-            mc.level.disconnect();
-            mc.clearLevel(new GenericDirtMessageScreen(Component.translatable("menu.savingLevel")));
-            mc.setScreen(new TitleScreen());
-        });
-        pause(20);
-        run("", () -> mc.createWorldOpenFlows().loadLevel(mc.screen, WORLD));
-        step("мир открыт повторно", 2400, () -> {
-            dismissWorldWarning();
-            return mc.player != null && mc.level != null && mc.screen == null && server() != null && serverPlayer() != null;
-        });
-        pause(60);
+        reloadWorld(mc);
         run("после перезагрузки сохранились работа, NPC, зачёт и выплата", () -> {
             check(onServer(() -> IntroData.get(server()).hasAccepted(mc.player.getUUID())), "Работа принята");
             check(npc(BUILDER).getUUID().equals(npcs[0]) && npc(FOREMAN).getUUID().equals(npcs[1])
