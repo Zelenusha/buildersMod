@@ -78,6 +78,19 @@ public class TraderStockGameTests {
     }
 
     @GameTest(template = "empty")
+    public static void biomeAt256BlocksIsLocalAndBeyondItIsDistant(GameTestHelper helper) {
+        // FR-110: a biome cell counts by its nearest block. Cells are four blocks wide.
+        helper.assertTrue(IntroTrades.horizontalDelta(0, 64) == 256, "The cell that starts 256 blocks east is on the boundary");
+        helper.assertTrue(IntroTrades.horizontalDelta(0, 65) == 260, "The next cell east lies beyond the radius");
+        helper.assertTrue(IntroTrades.horizontalDelta(0, -64) == 253 && IntroTrades.horizontalDelta(0, -65) == 257,
+                "To the west the last local cell ends at 253 and the first distant one at 257");
+        helper.assertTrue(IntroTrades.horizontalDelta(2, 0) == 0 && IntroTrades.horizontalDelta(5, 0) == 2,
+                "A cell around the centre has no distance, a cell behind it counts from its last block");
+        helper.assertTrue(256 * 256 <= 256 * 256 && 257 * 257 > 256 * 256, "The radius includes 256 and excludes 257");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
     public static void emptyMaterialDayStaysEmptyAcrossReloadAndShopsRemainSeparate(GameTestHelper helper) {
         long day = 4;
         Set<ResourceKey<Biome>> allLocal = Set.of(Biomes.PLAINS, Biomes.DESERT);

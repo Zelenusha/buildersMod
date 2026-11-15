@@ -139,6 +139,64 @@ public class AcceptanceRowsGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void materialListCountsAnAllowedSubstituteInTheSameRow(GameTestHelper helper) {
+        var server = helper.getLevel().getServer();
+        ServerLevel site = server.getLevel(ConstructionSite.SITE_LEVEL);
+        FakePlayer player = new FakePlayer(server.overworld(), new GameProfile(UUID.randomUUID(), "substitutes"));
+        IntroFixtures.setEmployment(player, helper.absolutePos(BlockPos.ZERO),
+                Math.floorDiv(server.overworld().getDayTime(), ContractBalance.TICKS_PER_DAY));
+        ContractData data = ContractData.get(server);
+        ContractData.Account account = data.account(player.getUUID());
+        var stone = io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Surface.solid(Blocks.STONE);
+        var spec = new io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Spec(5, 5, java.util.List.of(4), stone,
+                stone, stone, java.util.Set.of(io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Wall.OPPOSITE),
+                java.util.List.of(new io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Window(0,
+                        io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Wall.LEFT, 2, 2, 2, 2, Blocks.GLASS)),
+                java.util.List.of(new io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.Fixture(0,
+                        new BlockPos(2, 1, 2), Blocks.TORCH.defaultBlockState())), java.util.List.of(), java.util.Optional.empty());
+        BlockPos anchor = new BlockPos(-20, ConstructionSite.START_FLOOR_Y + 1, 20);
+        var direction = net.minecraft.core.Direction.NORTH;
+        var room = new ContractData.Accepted(anchor, direction, ContractBalance.Difficulty.ONE, 0, false,
+                io.github.zelenusha.buildersmod.blueprint.RectangularRoomBlueprint.at(anchor, direction, spec), 9, Kind.ROOM, 1, 0,
+                Map.of());
+        Map<BlockPos, BlockState> touched = new HashMap<>();
+        ContractEvents.withLoadedArea(site, new Bounds(new BlockPos(-40, 64, -40), new BlockPos(40, 70, 40)), () -> {
+            try {
+                ContractData.Accepted yard = OfferFactory.courtyard(site, account, room);
+                helper.assertTrue(yard != null, "The window has room for a courtyard");
+                account.courtyards.add(yard);
+                var offered = ContractEvents.panel(player, UUID.randomUUID(), false, "").cards().stream()
+                        .filter(card -> card.slot() == yard.slot()).findFirst().orElseThrow();
+                var earth = offered.materials().stream().filter(row -> row.label().equals("block.minecraft.dirt")).findFirst()
+                        .orElseThrow();
+                helper.assertTrue(earth.substitutes().equals("block.minecraft.grass_block") && earth.needed() > 0,
+                        "The dirt row lists grass as its allowed substitute");
+                helper.assertTrue(offered.conditions().contains("Пол из земли или дёрна"), "The card states the courtyard conditions");
+
+                account.active = yard.started(data.time(server));
+                var floor = yard.blueprint().requirements().entrySet().stream()
+                        .filter(entry -> entry.getValue().criterion() == RoomBlueprint.Criterion.FLOOR).map(Map.Entry::getKey)
+                        .limit(2).toList();
+                for (BlockPos pos : floor) {
+                    touched.put(pos, site.getBlockState(pos));
+                }
+                site.setBlock(floor.get(0), Blocks.DIRT.defaultBlockState(), PLACE);
+                site.setBlock(floor.get(1), Blocks.GRASS_BLOCK.defaultBlockState(), PLACE);
+                var inWork = ContractEvents.panel(player, UUID.randomUUID(), false, "").cards().stream()
+                        .filter(card -> card.slot() == yard.slot()).findFirst().orElseThrow();
+                helper.assertTrue(inWork.materials().stream().filter(row -> row.label().equals("block.minecraft.dirt"))
+                        .findFirst().orElseThrow().placed() == 2, "Dirt and grass fill one counter");
+            } finally {
+                touched.forEach((pos, state) -> site.setBlock(pos, state, PLACE));
+                account.active = null;
+                account.courtyards.clear();
+            }
+            return null;
+        });
+        helper.succeed();
+    }
+
     private static ContractNetwork.Card sample(ContractNetwork.Panel panel) {
         return panel.cards().stream().filter(card -> card.slot() == 0).findFirst().orElseThrow();
     }

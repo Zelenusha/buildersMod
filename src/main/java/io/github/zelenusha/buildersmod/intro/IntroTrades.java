@@ -127,7 +127,7 @@ final class IntroTrades {
         return nearby;
     }
 
-    private static int horizontalDelta(int center, int quart) {
+    static int horizontalDelta(int center, int quart) {
         int first = QuartPos.toBlock(quart);
         int last = first + QuartPos.toBlock(1) - 1;
         return Math.max(first - center, Math.max(0, center - last));
