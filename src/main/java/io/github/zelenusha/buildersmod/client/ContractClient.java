@@ -21,7 +21,6 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
@@ -149,7 +148,6 @@ public final class ContractClient {
         pose.pushPose();
         pose.translate(-camera.x, -camera.y, -camera.z);
         MultiBufferSource.BufferSource buffers = game.renderBuffers().bufferSource();
-        VertexConsumer faces = buffers.getBuffer(RenderType.debugFilledBox());
         var outlines = new ArrayList<BlockPos>();
         for (var entry : blueprint.requirements().entrySet()) {
             BlockPos position = entry.getKey();
@@ -161,19 +159,12 @@ public final class ContractClient {
                 continue;
             }
             if (status == RoomBlueprint.Status.MISSING) {
-                var shape = entry.getValue().expectedState().getShape(game.level, position);
-                if (shape.isEmpty()) {
-                    drawSilhouette(pose, faces, position, new AABB(0.25, 0.0, 0.25, 0.75, 0.75, 0.75));
-                } else {
-                    for (AABB part : shape.toAabbs()) {
-                        drawSilhouette(pose, faces, position, part);
-                    }
-                }
+                BlueprintPreview.draw(game, buffers, pose, position, entry.getValue().expectedState());
             } else {
                 outlines.add(position);
             }
         }
-        buffers.endBatch(RenderType.debugFilledBox());
+        BlueprintPreview.flush(buffers);
         VertexConsumer lines = buffers.getBuffer(RenderType.lines());
         for (BlockPos position : outlines) {
             double x = position.getX();
@@ -184,12 +175,6 @@ public final class ContractClient {
         }
         buffers.endBatch(RenderType.lines());
         pose.popPose();
-    }
-
-    private static void drawSilhouette(PoseStack pose, VertexConsumer faces, BlockPos position, AABB shape) {
-        AABB box = shape.move(position).deflate(0.002);
-        LevelRenderer.addChainedFilledBoxVertices(pose, faces, box.minX, box.minY, box.minZ, box.maxX, box.maxY,
-                box.maxZ, 0.22F, 0.58F, 1.0F, 0.25F);
     }
 
     @Mod.EventBusSubscriber(modid = BuildersMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
