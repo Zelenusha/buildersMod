@@ -24,6 +24,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.Container;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.biome.Biome;
@@ -33,6 +34,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
 
 final class OfferFactory {
     private static final Set<ResourceKey<Biome>> SAND_BIOMES = Set.of(Biomes.DESERT, Biomes.BEACH, Biomes.SNOWY_BEACH,
@@ -209,10 +211,12 @@ final class OfferFactory {
     }
 
     static boolean canResume(ServerLevel site, ContractData.Accepted proposal) {
-        return proposal.blueprint().requirements().keySet().stream().noneMatch(position -> {
-            BlockState state = site.getBlockState(position);
-            return state.hasBlockEntity() || state.getDestroySpeed(site, position) < 0 || !state.getFluidState().isEmpty();
-        });
+        for (BlockPos position : proposal.blueprint().bounds().positions()) {
+            if (obstructsPlacement(site, position, site.getBlockState(position))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int specialWage(ContractBalance.Difficulty level, RoomBlueprint blueprint) {
@@ -227,12 +231,16 @@ final class OfferFactory {
             return account.special;
         }
         int floor = ConstructionSite.START_FLOOR_Y + (account.highestFloor - 1) * ConstructionSite.FLOOR_STEP;
-        var stone = Blocks.STONE.defaultBlockState();
-        var brick = Blocks.STONE_BRICKS.defaultBlockState();
-        var materials = new SiteStairBlueprint.Materials(Blocks.COBBLESTONE_STAIRS.defaultBlockState(),
-                Blocks.COBBLESTONE.defaultBlockState(), stone, brick, brick);
+        var lowerRoom = account.rooms.stream()
+                .filter(order -> order.kind() == ContractData.Kind.STAIRS
+                        && order.blueprint().interior().min().getY() == floor + 1)
+                .findFirst()
+                .flatMap(order -> SiteStairBlueprint.lowerRoomMaterials(order.blueprint(), floor))
+                .orElseGet(() -> new SiteStairBlueprint.LowerRoomMaterials(Blocks.STONE.defaultBlockState(),
+                        Blocks.STONE_BRICKS.defaultBlockState()));
+        var materials = SiteStairBlueprint.selectMaterials(RandomSource.create(site.getSeed() ^ (long) floor * 71_531L));
         var level = ContractBalance.Difficulty.TWO;
-        return SiteStairBlueprint.createFitting(floor, materials, stone, brick, site::getBlockState)
+        return SiteStairBlueprint.createFitting(floor, materials, lowerRoom.floor(), lowerRoom.ceiling(), site::getBlockState)
                 .map(blueprint -> proposal(new SiteDoor(new BlockPos(0, floor + 1, 0), Direction.WEST),
                         level, blueprint, specialWage(level, blueprint), ContractData.Kind.STAIRS, -1)).orElse(null);
     }
@@ -268,6 +276,9 @@ final class OfferFactory {
         }
         if (account.active != null && account.active.kind() != ContractData.Kind.STAIRS) {
             occupied.add(account.active.blueprint().bounds());
+        }
+        if (account.special != null && account.special.kind() == ContractData.Kind.CORRIDOR && account.special != account.active) {
+            occupied.add(account.special.blueprint().bounds());
         }
         return occupied;
     }
@@ -309,7 +320,7 @@ final class OfferFactory {
                 }
                 continue;
             }
-            if (state.hasBlockEntity() || state.getDestroySpeed(site, position) < 0 || !state.getFluidState().isEmpty()) {
+            if (obstructsPlacement(site, position, state)) {
                 return null;
             }
             boolean column = state.is(Blocks.STONE_BRICKS) && ConstructionSite.isOriginalColumnPosition(position);
@@ -324,6 +335,14 @@ final class OfferFactory {
         }
         return new Placement(RoomBlueprint.of(candidate.bounds(), candidate.interiorVolumes(), requirements, candidate.doors(),
                 candidate.bonus()), Map.copyOf(originals));
+    }
+
+    private static boolean obstructsPlacement(ServerLevel site, BlockPos pos, BlockState state) {
+        if (state.getDestroySpeed(site, pos) < 0 || !state.getFluidState().isEmpty()) {
+            return true;
+        }
+        var entity = state.hasBlockEntity() ? site.getBlockEntity(pos) : null;
+        return entity instanceof Container || entity != null && entity.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent();
     }
 
     private record Placement(RoomBlueprint blueprint, Map<BlockPos, BlockState> originals) { }

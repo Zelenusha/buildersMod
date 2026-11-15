@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
@@ -55,6 +56,34 @@ public final class SiteStairBlueprint {
                 }
             }
         }
+    }
+
+    public record LowerRoomMaterials(BlockState floor, BlockState ceiling) {}
+
+    public static Materials selectMaterials(RandomSource random) {
+        // Each flight uses stairs and landings made from the same common stone ingredient.
+        boolean useBricks = random.nextBoolean();
+        var stairs = useBricks ? Blocks.STONE_BRICK_STAIRS : Blocks.COBBLESTONE_STAIRS;
+        var landings = useBricks ? Blocks.STONE_BRICKS : Blocks.COBBLESTONE;
+        // The room separately draws from stable, readily obtainable overworld materials.
+        boolean useGranite = random.nextBoolean();
+        var floor = useGranite ? Blocks.POLISHED_GRANITE : Blocks.STONE;
+        var walls = useGranite ? Blocks.GRANITE : Blocks.STONE_BRICKS;
+        var ceiling = useGranite ? Blocks.POLISHED_GRANITE : Blocks.SMOOTH_STONE;
+        return new Materials(stairs.defaultBlockState(), landings.defaultBlockState(), floor.defaultBlockState(),
+                walls.defaultBlockState(), ceiling.defaultBlockState());
+    }
+
+    public static Optional<LowerRoomMaterials> lowerRoomMaterials(RoomBlueprint previous, int floorY) {
+        // These tiles are outside both mirror routes, so the predecessor always stores the shell materials here.
+        BlockPos floorSample = new BlockPos(3, floorY, 0);
+        BlockPos roofSample = floorSample.above(ROOM_CEILING_OFFSET);
+        Requirement floor = previous.requirements().get(floorSample);
+        Requirement ceiling = previous.requirements().get(roofSample);
+        if (floor == null || floor.criterion() != Criterion.FLOOR || ceiling == null || ceiling.criterion() != Criterion.CEILING) {
+            return Optional.empty();
+        }
+        return Optional.of(new LowerRoomMaterials(floor.expectedState(), ceiling.expectedState()));
     }
 
     private SiteStairBlueprint() {}

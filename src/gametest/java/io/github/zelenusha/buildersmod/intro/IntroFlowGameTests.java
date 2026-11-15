@@ -150,6 +150,14 @@ public class IntroFlowGameTests {
         ServerLevel level = helper.getLevel();
         BlockPos testOrigin = helper.absolutePos(BlockPos.ZERO);
         BlockPos ground = new BlockPos(testOrigin.getX() + xOffset, level.getMaxBuildHeight() - 12, testOrigin.getZ());
+        // The empty GameTest template does not reset this elevated fixture on subsequent server runs.
+        BlockPos base = ground.offset(-radius, -2, -radius);
+        BlockPos top = ground.offset(radius, 9, radius);
+        for (BlockPos pos : BlockPos.betweenClosed(base, top)) {
+            if (!level.isEmptyBlock(pos)) {
+                level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+        }
         for (BlockPos pos : BlockPos.betweenClosed(ground.offset(-radius, 0, -radius), ground.offset(radius, 0, radius))) {
             level.setBlock(pos, Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_CLIENTS);
         }
