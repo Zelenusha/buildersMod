@@ -10,6 +10,7 @@ import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -19,6 +20,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
@@ -101,7 +103,15 @@ public final class ContractClient {
         if (value.signum() == 0) {
             return "<0,01 дня";
         }
-        return value.stripTrailingZeros().toPlainString().replace('.', ',') + " дн.";
+        BigDecimal display = value.stripTrailingZeros();
+        String units = "дня";
+        if (display.scale() <= 0) {
+            long count = display.longValueExact();
+            long lastTwo = count % 100;
+            long last = count % 10;
+            units = lastTwo >= 11 && lastTwo <= 14 ? "дней" : last == 1 ? "день" : last >= 2 && last <= 4 ? "дня" : "дней";
+        }
+        return display.toPlainString().replace('.', ',') + " " + units;
     }
 
     @SubscribeEvent
@@ -140,8 +150,9 @@ public final class ContractClient {
         pose.translate(-camera.x, -camera.y, -camera.z);
         MultiBufferSource.BufferSource buffers = game.renderBuffers().bufferSource();
         VertexConsumer faces = buffers.getBuffer(RenderType.debugFilledBox());
-        var outlines = new java.util.ArrayList<BlockPos>();
-        for (BlockPos position : blueprint.requirements().keySet()) {
+        var outlines = new ArrayList<BlockPos>();
+        for (var entry : blueprint.requirements().entrySet()) {
+            BlockPos position = entry.getKey();
             if (!game.level.hasChunkAt(position) || position.distToCenterSqr(camera.x, camera.y, camera.z) > 64 * 64) {
                 continue;
             }
@@ -149,12 +160,15 @@ public final class ContractClient {
             if (status == RoomBlueprint.Status.CORRECT) {
                 continue;
             }
-            double x = position.getX();
-            double y = position.getY();
-            double z = position.getZ();
             if (status == RoomBlueprint.Status.MISSING) {
-                LevelRenderer.addChainedFilledBoxVertices(pose, faces, x + 0.006, y + 0.006, z + 0.006,
-                        x + 0.994, y + 0.994, z + 0.994, 0.22F, 0.58F, 1.0F, 0.25F);
+                var shape = entry.getValue().expectedState().getShape(game.level, position);
+                if (shape.isEmpty()) {
+                    drawSilhouette(pose, faces, position, new AABB(0.25, 0.0, 0.25, 0.75, 0.75, 0.75));
+                } else {
+                    for (AABB part : shape.toAabbs()) {
+                        drawSilhouette(pose, faces, position, part);
+                    }
+                }
             } else {
                 outlines.add(position);
             }
@@ -170,6 +184,12 @@ public final class ContractClient {
         }
         buffers.endBatch(RenderType.lines());
         pose.popPose();
+    }
+
+    private static void drawSilhouette(PoseStack pose, VertexConsumer faces, BlockPos position, AABB shape) {
+        AABB box = shape.move(position).deflate(0.002);
+        LevelRenderer.addChainedFilledBoxVertices(pose, faces, box.minX, box.minY, box.minZ, box.maxX, box.maxY,
+                box.maxZ, 0.22F, 0.58F, 1.0F, 0.25F);
     }
 
     @Mod.EventBusSubscriber(modid = BuildersMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
@@ -190,7 +210,7 @@ public final class ContractClient {
                 }
                 var font = game.font;
                 int y = 5;
-                var labels = new java.util.ArrayList<String>();
+                var labels = new ArrayList<String>();
                 if (blueprint != null) {
                     labels.add(title + (paused ? " · пауза" : "") + " — " + days(remaining));
                 }

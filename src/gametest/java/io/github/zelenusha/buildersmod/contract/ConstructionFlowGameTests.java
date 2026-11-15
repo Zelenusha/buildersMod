@@ -7,6 +7,7 @@ import io.github.zelenusha.buildersmod.blueprint.SampleRoomBlueprint;
 import io.github.zelenusha.buildersmod.intro.IntroFixtures;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import io.github.zelenusha.buildersmod.site.ConstructionSite.SiteDoor;
+import io.netty.buffer.Unpooled;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -14,6 +15,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.Items;
@@ -87,6 +89,7 @@ public class ConstructionFlowGameTests {
             }
             helper.assertTrue(blueprint.check(site).complete() && blueprint.check(site).bonusEmeralds() == 5,
                     "The reference room is complete with the three-cake bonus");
+            verifyForemanDetails(helper, accepted, blueprint.check(site));
 
             // Seed the actual player RNG so the foreman's independent 10% fine roll does not alter this wage scenario.
             helper.assertTrue(RandomSource.create(1L).nextInt(10) != 0, "This seed must leave the wage untaxed");
@@ -113,6 +116,30 @@ public class ConstructionFlowGameTests {
                     "Repeated submission and collection cannot pay the same room a second time");
         } finally {
             previous.forEach((pos, state) -> site.setBlock(pos, state, Block.UPDATE_CLIENTS));
+        }
+    }
+
+    private static void verifyForemanDetails(GameTestHelper helper, ContractData.Accepted order, RoomBlueprint.BlueprintCheck check) {
+        var offer = ContractEvents.card(order, null, order.difficulty().duration(), false, false, "Нет свободного подходящего проёма");
+        var active = ContractEvents.card(order, check, order.difficulty().duration(), true, true, "");
+        helper.assertTrue(offer.conditions().contains("Внутренние размеры 5×5 блоков")
+                        && offer.conditions().contains("Дверных проёмов 4")
+                        && offer.conditions().contains("Источников света 2"),
+                "The foreman provides structural conditions before acceptance");
+        var doors = active.materials().stream().filter(row -> row.label().equals(Items.OAK_DOOR.getDescriptionId()))
+                .findFirst().orElseThrow();
+        helper.assertTrue(doors.needed() == 4 && doors.placed() == 4, "Each complete two-block door counts as one item");
+        helper.assertTrue(offer.bonusFound() == 0 && active.bonusFound() == 3 && active.bonusTarget() == 3 && active.bonus() == 5,
+                "The separate bonus list contains the exact target and actual progress");
+        var panel = new ContractNetwork.Panel(UUID.randomUUID(), false, ContractNetwork.State.ACTIVE, 0, 0,
+                java.util.List.of(offer, active), 0, 0, "", "", "");
+        var buffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            ContractNetwork.Panel.write(panel, buffer);
+            helper.assertTrue(ContractNetwork.Panel.read(buffer).equals(panel) && !buffer.isReadable(),
+                    "The client packet preserves details, measurements and the unavailable reason");
+        } finally {
+            buffer.release();
         }
     }
 

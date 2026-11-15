@@ -568,11 +568,11 @@ public final class ContractEvents {
         if (!dialogue && order != null) {
             state = ContractNetwork.State.ACTIVE;
             cards.add(card(order, check(player, order), remaining(account, data.time(player.server)), true,
-                    canBuyTime(account)));
+                    canBuyTime(account), ""));
             OfferFactory.fill(player, data, account);
             for (var offer : account.offers) {
                 if (offer != null && offer.slot() != order.slot()) {
-                    cards.add(card(offer, null, offer.difficulty().duration(), false, false));
+                    cards.add(card(offer, null, offer.difficulty().duration(), false, false, "Выполняется другая постройка"));
                 }
             }
         } else if (!dialogue && offersAreReady(player)) {
@@ -581,18 +581,21 @@ public final class ContractEvents {
                 OfferFactory.fill(player, data, account);
                 for (ContractData.Accepted offer : account.offers) {
                     if (offer != null && (offer.slot() < 3 || account.incidentOffers[offer.slot() - 3] == null)) {
-                        cards.add(card(offer, null, offer.difficulty().duration(),
-                                OfferFactory.bind(site, account, offer) != null, false));
+                        boolean fits = OfferFactory.bind(site, account, offer) != null;
+                        String reason = account.highestFloor >= ConstructionSite.FLOOR_COUNT
+                                ? "Открыт последний этаж" : "Нет свободного подходящего проёма";
+                        cards.add(card(offer, null, offer.difficulty().duration(), fits, false, fits ? "" : reason));
                     }
                 }
                 if (cards.stream().noneMatch(ContractNetwork.Card::available)) {
                     ContractData.Accepted extension = OfferFactory.extension(site, account);
                     if (extension != null) {
-                        cards.add(card(extension, null, extension.difficulty().duration(), true, false));
+                        cards.add(card(extension, null, extension.difficulty().duration(), true, false, ""));
                     }
                 }
                 for (var yard : account.courtyards) {
-                    cards.add(card(yard, null, yard.difficulty().duration(), OfferFactory.canResume(site, yard), false));
+                    boolean fits = OfferFactory.canResume(site, yard);
+                    cards.add(card(yard, null, yard.difficulty().duration(), fits, false, fits ? "" : "Участок дворика занят"));
                 }
             }
             state = cards.stream().anyMatch(ContractNetwork.Card::available)
@@ -620,13 +623,14 @@ public final class ContractEvents {
     private static ContractNetwork.Card incidentCard(int slot, IncidentState.Kind kind, ContractBalance.Difficulty level,
                                                       boolean available, UUID id, BlockPos room) {
         return new ContractNetwork.Card(slot, kind.title, level.ordinal() + 1, level.emeralds(), 0, -1,
-                available, false, 0, room.toShortString(), 0, 0, List.of(), id, kind == IncidentState.Kind.CLEANUP);
+                available, false, 0, room.toShortString(), 0, 0, List.of(), List.of(),
+                available ? "" : "Сначала сдай активное происшествие", id, kind == IncidentState.Kind.CLEANUP);
     }
 
     private record MaterialKey(net.minecraft.world.item.Item primary, List<net.minecraft.world.item.Item> substitutes) { }
 
-    private static ContractNetwork.Card card(ContractData.Accepted order, RoomBlueprint.BlueprintCheck check,
-                                             long remaining, boolean available, boolean canBuyTime) {
+    static ContractNetwork.Card card(ContractData.Accepted order, RoomBlueprint.BlueprintCheck check,
+                                    long remaining, boolean available, boolean canBuyTime, String unavailableReason) {
         Map<MaterialKey, int[]> groups = new LinkedHashMap<>();
         for (var entry : order.blueprint().requirements().entrySet()) {
             BlockPos position = entry.getKey();
@@ -666,7 +670,40 @@ public final class ContractEvents {
         return new ContractNetwork.Card(order.slot(), order.kind().title, order.difficulty().ordinal() + 1,
                 order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, canBuyTime,
                 check == null ? 0 : check.mismatchCount(), bonus == null ? "" : bonus.block().asItem().getDescriptionId(),
-                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials, null, false);
+                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials,
+                conditions(order), unavailableReason, null, false);
+    }
+
+    private static List<String> conditions(ContractData.Accepted order) {
+        RoomBlueprint blueprint = order.blueprint();
+        var volumes = blueprint.interiorVolumes();
+        var first = volumes.get(0);
+        int width = first.max().getX() - first.min().getX() + 1;
+        int depth = first.max().getZ() - first.min().getZ() + 1;
+        List<String> rows = new ArrayList<>();
+        if (order.kind() == ContractData.Kind.COURTYARD) {
+            rows.add("Дворик под открытым верхом");
+            rows.add("Пол из земли или дёрна, один ряд ограды");
+        } else {
+            rows.add("Внутренние размеры " + width + "×" + depth + " блоков");
+            String heights = volumes.stream().map(volume -> Integer.toString(volume.max().getY() - volume.min().getY() + 1))
+                    .collect(java.util.stream.Collectors.joining(" / "));
+            rows.add("Этажей " + volumes.size() + " · Высота " + heights);
+            rows.add("Пол, стены и потолок по чертежу");
+        }
+        rows.add("Дверных проёмов " + blueprint.doors().size());
+        var counts = new java.util.EnumMap<RoomBlueprint.Criterion, Long>(RoomBlueprint.Criterion.class);
+        blueprint.requirements().values().forEach(requirement -> counts.merge(requirement.criterion(), 1L, Long::sum));
+        if (counts.containsKey(RoomBlueprint.Criterion.LIGHTING)) {
+            rows.add("Источников света " + counts.get(RoomBlueprint.Criterion.LIGHTING));
+        }
+        if (counts.containsKey(RoomBlueprint.Criterion.WINDOWS)) {
+            rows.add("Остекление по чертежу · " + counts.get(RoomBlueprint.Criterion.WINDOWS) + " блоков");
+        }
+        if (counts.containsKey(RoomBlueprint.Criterion.STAIRWAYS)) {
+            rows.add("Свободный проход по лестнице");
+        }
+        return List.copyOf(rows);
     }
 
     private static void sync(ServerPlayer player, ContractData data, ContractData.Account account) {

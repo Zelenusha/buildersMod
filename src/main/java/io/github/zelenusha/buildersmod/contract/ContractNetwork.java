@@ -32,7 +32,8 @@ public final class ContractNetwork {
 
     public record Card(int slot, String title, int level, int wage, int bonus, long remaining, boolean available,
                        boolean canBuyTime, int missing, String bonusLabel, int bonusFound, int bonusTarget,
-                       List<Material> materials, UUID incidentId, boolean canParallel) {
+                       List<Material> materials, List<String> conditions, String unavailableReason,
+                       UUID incidentId, boolean canParallel) {
         void write(FriendlyByteBuf buffer) {
             buffer.writeVarInt(slot).writeUtf(title, 128).writeVarInt(level).writeVarInt(wage).writeVarInt(bonus)
                     .writeVarLong(remaining);
@@ -40,6 +41,8 @@ public final class ContractNetwork {
             buffer.writeBoolean(canBuyTime);
             buffer.writeVarInt(missing).writeUtf(bonusLabel, 128).writeVarInt(bonusFound).writeVarInt(bonusTarget);
             buffer.writeCollection(materials, (buf, material) -> material.write(buf));
+            buffer.writeCollection(conditions, (buf, condition) -> buf.writeUtf(condition, 160));
+            buffer.writeUtf(unavailableReason, 128);
             buffer.writeNullable(incidentId, FriendlyByteBuf::writeUUID);
             buffer.writeBoolean(canParallel);
         }
@@ -48,6 +51,7 @@ public final class ContractNetwork {
             return new Card(buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(),
                     buffer.readVarInt(), buffer.readVarLong(), buffer.readBoolean(), buffer.readBoolean(),
                     buffer.readVarInt(), buffer.readUtf(128), buffer.readVarInt(), buffer.readVarInt(), buffer.readList(Material::read),
+                    buffer.readList(buf -> buf.readUtf(160)), buffer.readUtf(128),
                     buffer.readNullable(FriendlyByteBuf::readUUID), buffer.readBoolean());
         }
     }
@@ -162,7 +166,7 @@ public final class ContractNetwork {
         }
     }
 
-    private static final String PROTOCOL = "5";
+    private static final String PROTOCOL = "6";
     private static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.fromNamespaceAndPath(BuildersMod.MOD_ID, "contracts"), () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals);
 

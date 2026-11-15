@@ -13,7 +13,10 @@ final class ForemanScreen extends Screen {
     private static final int HEIGHT = 227;
     private final ContractNetwork.Panel panel;
     private int selected;
-    private int materialOffset;
+    private int detailOffset;
+    private Detail detail = Detail.MATERIALS;
+
+    private enum Detail { CONDITIONS, MATERIALS, BONUS }
 
     ForemanScreen(ContractNetwork.Panel panel) {
         super(Component.literal(panel.dialogue() ? "Прораб" : "Заказы строительной конторы"));
@@ -57,6 +60,12 @@ final class ForemanScreen extends Screen {
             }
         }
 
+        if (card != null && card.remaining() >= 0) {
+            detailButton("Условия", Detail.CONDITIONS, x, y + 86);
+            detailButton("Материалы", Detail.MATERIALS, x + 97, y + 86);
+            detailButton("Бонус", Detail.BONUS, x + 194, y + 86);
+        }
+
         if (card != null && card.incidentId() != null) {
             addRenderableWidget(Button.builder(Component.literal("Сдать работу"), button -> {
                 button.active = false;
@@ -92,9 +101,18 @@ final class ForemanScreen extends Screen {
     private Button selector(String label, int index, int x, int y, int width) {
         return addRenderableWidget(Button.builder(Component.literal(label), button -> {
             selected = index;
-            materialOffset = 0;
+            detailOffset = 0;
             rebuildWidgets();
         }).bounds(x, y, width, 20).build());
+    }
+
+    private void detailButton(String label, Detail next, int x, int y) {
+        Button button = addRenderableWidget(Button.builder(Component.literal(label), clicked -> {
+            detail = next;
+            detailOffset = 0;
+            rebuildWidgets();
+        }).bounds(x, y, 94, 18).build());
+        button.active = detail != next;
     }
 
     private Button action(String label, ContractNetwork.Action action, int choice, int x, int y, int width) {
@@ -151,22 +169,41 @@ final class ForemanScreen extends Screen {
             if (card.canParallel() && card.incidentId() == null) {
                 graphics.drawString(font, "Можно принять дополнительно", x, y + 33, 0x91DE92, false);
             }
-        } else if (!card.available() && card.remaining() >= 0) {
-            graphics.drawString(font, "Заказ сейчас недоступен", x, y + 22, 0xF3D88C, false);
-        } else if (!card.bonusLabel().isEmpty()) {
-            String label = Component.translatable(card.bonusLabel()).getString();
-            String amount = active ? card.bonusFound() + "/" + card.bonusTarget() : "×" + card.bonusTarget();
-            graphics.drawString(font, "Бонус: " + label + " " + amount, x, y + 22,
-                    active && card.bonusFound() == card.bonusTarget() ? 0x91DE92 : 0xE4E9ED, false);
+        } else if (!card.available()) {
+            graphics.drawString(font, card.unavailableReason(), x, y + 22, 0xF3D88C, false);
+        } else if (active) {
+            graphics.drawString(font, "Позиций с расхождениями " + card.missing(), x, y + 22, 0xE4E9ED, false);
         }
-        int limit = Math.min(card.materials().size(), materialOffset + 5);
-        for (int index = materialOffset; index < limit; index++) {
+        if (card.remaining() < 0) {
+            return;
+        }
+        int firstRow = y + 55;
+        if (detail == Detail.BONUS) {
+            if (card.bonusLabel().isEmpty()) {
+                graphics.drawString(font, "В этом заказе нет бонусных условий.", x, firstRow, 0xE4E9ED, false);
+                return;
+            }
+            String label = Component.translatable(card.bonusLabel()).getString();
+            String amount = active ? card.bonusFound() + " / " + card.bonusTarget() : "×" + card.bonusTarget();
+            graphics.drawString(font, label + " " + amount + " · +" + card.bonus() + " изумр.", x, firstRow,
+                    active && card.bonusFound() == card.bonusTarget() ? 0x91DE92 : 0xE4E9ED, false);
+            graphics.drawString(font, "Ровно " + card.bonusTarget() + " внутри комнаты", x, firstRow + 11, 0xE4E9ED, false);
+            return;
+        }
+        if (detail == Detail.CONDITIONS) {
+            for (int index = detailOffset; index < Math.min(card.conditions().size(), detailOffset + 4); index++) {
+                graphics.drawString(font, card.conditions().get(index), x, firstRow + (index - detailOffset) * 10, 0xE4E9ED, false);
+            }
+            return;
+        }
+        int limit = Math.min(card.materials().size(), detailOffset + 4);
+        for (int index = detailOffset; index < limit; index++) {
             ContractNetwork.Material material = card.materials().get(index);
-            int rowY = y + 34 + (index - materialOffset) * 11;
+            int rowY = firstRow + (index - detailOffset) * 10;
             String label = Component.translatable(material.label()).getString();
-            String amount = active ? material.placed() + "/" + material.needed() : "×" + material.needed();
+            String amount = active ? material.placed() + " / " + material.needed() : "×" + material.needed();
             int color = active && material.placed() == material.needed() ? 0x91DE92 : 0xE4E9ED;
-            graphics.drawString(font, label + " " + amount, x, rowY, color, false);
+            graphics.drawString(font, label + " " + amount + (material.substitutes().isEmpty() ? "" : " ▸"), x, rowY, color, false);
             if (!material.substitutes().isEmpty() && mouseX >= x && mouseX <= x + WIDTH - 24
                     && mouseY >= rowY && mouseY < rowY + 11) {
                 List<Component> lines = java.util.Arrays.stream(material.substitutes().split(","))
@@ -179,9 +216,10 @@ final class ForemanScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         ContractNetwork.Card card = selectedCard();
-        if (card != null) {
-            int maximum = Math.max(0, card.materials().size() - 5);
-            materialOffset = Math.max(0, Math.min(maximum, materialOffset - (int) Math.signum(delta)));
+        if (card != null && card.remaining() >= 0 && detail != Detail.BONUS) {
+            int rows = detail == Detail.MATERIALS ? card.materials().size() : card.conditions().size();
+            int maximum = Math.max(0, rows - 4);
+            detailOffset = Math.max(0, Math.min(maximum, detailOffset - (int) Math.signum(delta)));
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, delta);
