@@ -12,10 +12,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Vindicator;
-import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.block.BaseFireBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -169,9 +167,6 @@ public final class IncidentWorld {
     }
 
     public static List<BlockPos> evictionCandidates(ServerLevel level, RoomBlueprint room) {
-        if (level.getDifficulty() == Difficulty.PEACEFUL) {
-            return List.of();
-        }
         return interiorCandidates(level, room).stream().filter(pos -> canStand(level, room, pos)).toList();
     }
 
@@ -215,7 +210,7 @@ public final class IncidentWorld {
 
         List<Vindicator> spawned = new ArrayList<>();
         for (int index = 0; index < missing.size(); index++) {
-            Vindicator resident = EntityType.VINDICATOR.create(level);
+            RoomResident resident = RoomResident.TYPE.get().create(level);
             if (resident == null) {
                 spawned.forEach(Entity::discard);
                 return false;
@@ -257,7 +252,7 @@ public final class IncidentWorld {
                 || !level.getBlockState(pos.below()).isFaceSturdy(level, pos.below(), Direction.UP)) {
             return false;
         }
-        AABB space = EntityType.VINDICATOR.getDimensions().makeBoundingBox(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+        AABB space = RoomResident.TYPE.get().getDimensions().makeBoundingBox(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
         return level.noCollision(space) && level.getEntities(null, space).isEmpty();
     }
 

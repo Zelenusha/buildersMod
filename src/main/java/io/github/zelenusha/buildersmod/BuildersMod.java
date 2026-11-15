@@ -4,6 +4,7 @@ import io.github.zelenusha.buildersmod.contract.ContractNetwork;
 import io.github.zelenusha.buildersmod.contract.IncidentWork;
 import io.github.zelenusha.buildersmod.intro.IntroEvents;
 import io.github.zelenusha.buildersmod.maintenance.WorkItems;
+import io.github.zelenusha.buildersmod.maintenance.RoomResident;
 import io.github.zelenusha.buildersmod.site.ConstructionSite;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.Mod;
@@ -16,6 +17,7 @@ public final class BuildersMod {
     public BuildersMod(FMLJavaModLoadingContext context) {
         ConstructionSite.register(context.getModEventBus());
         WorkItems.register(context.getModEventBus());
+        RoomResident.register(context.getModEventBus());
         IntroEvents.register(MinecraftForge.EVENT_BUS);
         ContractNetwork.register();
         IncidentWork.register();

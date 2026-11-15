@@ -483,7 +483,7 @@ public final class ContractEvents {
         return "Работа принята. Зарплата у прораба.";
     }
 
-    @SubscribeEvent
+    @SubscribeEvent(priority = EventPriority.MONITOR)
     public static void onDeath(net.minecraftforge.event.entity.living.LivingDeathEvent event) {
         if (!(event.getEntity().level() instanceof ServerLevel level)) {
             return;
