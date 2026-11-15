@@ -43,6 +43,7 @@ public final class IntroEvents {
     private static final String FOREMAN = "buildersmod_foreman";
     private static final String TRADER = "buildersmod_trader";
     private static final String COMMAND = "buildersmod_job";
+    private static final float TOWARD_ENTRANCE = 180;
 
     private IntroEvents() {
     }
@@ -146,7 +147,9 @@ public final class IntroEvents {
             return;
         }
         Villager builder = EntityType.VILLAGER.create(player.serverLevel());
-        if (builder != null && spawn(player.serverLevel(), builder, player, position, BUILDER, "Строитель")) {
+        float towardPlayer = (float) Math.toDegrees(Math.atan2(position.getX() + 0.5 - player.getX(),
+                player.getZ() - position.getZ() - 0.5));
+        if (builder != null && spawn(player.serverLevel(), builder, player, position, towardPlayer, BUILDER, "Строитель")) {
             work.builder = builder.getUUID();
             work.builderReturnDay = -1;
             data.setDirty();
@@ -239,16 +242,16 @@ public final class IntroEvents {
         foreman.setInvulnerable(true);
         trader.setDespawnDelay(0);
         trader.setInvulnerable(true);
-        if (!spawn(level, foreman, player, office.offset(5, 1, 5), FOREMAN, "Прораб")) {
+        if (!spawn(level, foreman, player, office.offset(5, 1, 5), TOWARD_ENTRANCE, FOREMAN, "Прораб")) {
             return 0;
         }
-        if (!spawn(level, trader, player, office.offset(10, 1, 4), TRADER, "Странствующий торговец")) {
+        if (!spawn(level, trader, player, office.offset(10, 1, 4), TOWARD_ENTRANCE, TRADER, "Странствующий торговец")) {
             foreman.discard();
             return 0;
         }
 
         IntroStructures.build(level, sites);
-        placeNpc(builder, office.offset(3, 1, 3));
+        placeNpc(builder, office.offset(3, 1, 3), TOWARD_ENTRANCE);
         builder.setInvulnerable(true);
         IntroTrades.equipBuilder(builder);
 
@@ -320,19 +323,22 @@ public final class IntroEvents {
     }
 
     private static boolean spawn(ServerLevel level, AbstractVillager npc, ServerPlayer owner, BlockPos position,
-                                 String tag, String name) {
+                                 float yaw, String tag, String name) {
         npc.addTag(tag);
         npc.getPersistentData().putUUID(OWNER, owner.getUUID());
         npc.setCustomName(Component.literal(name));
         npc.setCustomNameVisible(true);
         npc.setPersistenceRequired();
         npc.setNoAi(true);
-        placeNpc(npc, position);
+        placeNpc(npc, position, yaw);
         return level.addFreshEntity(npc);
     }
 
-    private static void placeNpc(AbstractVillager npc, BlockPos position) {
-        npc.moveTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5, 180, 0);
+    private static void placeNpc(AbstractVillager npc, BlockPos position, float yaw) {
+        npc.moveTo(position.getX() + 0.5, position.getY(), position.getZ() + 0.5, yaw, 0);
+        // A mob without AI never turns its head or body to its own yaw.
+        npc.setYHeadRot(yaw);
+        npc.setYBodyRot(yaw);
     }
 
     private static long day(ServerLevel level) {

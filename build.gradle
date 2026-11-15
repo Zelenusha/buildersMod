@@ -26,7 +26,17 @@ minecraft {
                 buildersmod { source sourceSets.main }
             }
         }
-        client { }
+        client {
+            // gradlew runClient -Pwalkthrough=main plays a scripted session and writes screenshots to run-walkthrough.
+            if (project.hasProperty('walkthrough')) {
+                workingDirectory project.file('run-walkthrough')
+                property 'buildersmod.walkthrough', project.property('walkthrough')
+                args '--width', '1280', '--height', '720'
+                mods {
+                    buildersmod { source sourceSets.gametest }
+                }
+            }
+        }
         gameTestServer {
             workingDirectory project.file('run-tests')
             property 'forge.enabledGameTestNamespaces', mod_id
@@ -61,6 +71,15 @@ tasks.named('processResources', ProcessResources).configure {
 
 test {
     useJUnitPlatform()
+}
+
+if (project.hasProperty('walkthrough')) {
+    // The scripted client must not stop on first-run screens or when its window loses focus.
+    def runDir = file('run-walkthrough')
+    runDir.mkdirs()
+    new File(runDir, 'options.txt').text = ['version:3465', 'onboardAccessibility:false', 'pauseOnLostFocus:false',
+            'tutorialStep:none', 'lang:ru_ru', 'guiScale:2', 'narrator:0', 'soundCategory_master:0.0',
+            'realmsNotifications:false', 'renderDistance:10', 'fullscreen:false'].join('\n') + '\n'
 }
 
 jar.finalizedBy('reobfJar')

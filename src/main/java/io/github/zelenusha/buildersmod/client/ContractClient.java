@@ -20,6 +20,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
@@ -97,11 +99,17 @@ public final class ContractClient {
             return "0 дней";
         }
         BigDecimal value = BigDecimal.valueOf(ticks)
-                .divide(BigDecimal.valueOf(ContractBalance.TICKS_PER_DAY), 2, RoundingMode.HALF_UP);
+                .divide(BigDecimal.valueOf(ContractBalance.TICKS_PER_DAY), 2, RoundingMode.HALF_UP).stripTrailingZeros();
         if (value.signum() == 0) {
             return "<0,01 дня";
         }
-        return value.stripTrailingZeros().toPlainString().replace('.', ',') + " дн.";
+        String unit = "дня";
+        if (value.scale() <= 0) {
+            int whole = value.intValueExact();
+            unit = whole % 10 == 1 && whole % 100 != 11 ? "день"
+                    : whole % 10 >= 2 && whole % 10 <= 4 && (whole % 100 < 12 || whole % 100 > 14) ? "дня" : "дней";
+        }
+        return value.toPlainString().replace('.', ',') + " " + unit;
     }
 
     @SubscribeEvent
@@ -153,8 +161,11 @@ public final class ContractClient {
             double y = position.getY();
             double z = position.getZ();
             if (status == RoomBlueprint.Status.MISSING) {
-                LevelRenderer.addChainedFilledBoxVertices(pose, faces, x + 0.006, y + 0.006, z + 0.006,
-                        x + 0.994, y + 0.994, z + 0.994, 0.22F, 0.58F, 1.0F, 0.25F);
+                // The silhouette follows the expected block's own outline, so doors, torches and stairs show their facing.
+                VoxelShape shape = blueprint.requirements().get(position).expectedState().getShape(game.level, position);
+                (shape.isEmpty() ? Shapes.block() : shape).forAllBoxes((x1, y1, z1, x2, y2, z2) ->
+                        LevelRenderer.addChainedFilledBoxVertices(pose, faces, x + x1 + 0.006, y + y1 + 0.006, z + z1 + 0.006,
+                                x + x2 - 0.006, y + y2 - 0.006, z + z2 - 0.006, 0.22F, 0.58F, 1.0F, 0.25F));
             } else {
                 outlines.add(position);
             }

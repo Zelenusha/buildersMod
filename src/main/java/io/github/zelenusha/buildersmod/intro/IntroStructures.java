@@ -27,6 +27,7 @@ import java.util.Optional;
 final class IntroStructures {
     private static final int NEARBY_RADIUS = 36;
     private static final int MAX_SLOPE = 3;
+    private static final int PLOT_GAP = 3;
 
     private IntroStructures() {
     }
@@ -61,7 +62,9 @@ final class IntroStructures {
                 });
                 if (office.isPresent()) {
                     BoundingBox officeArea = footprint(office.get(), 13, 11, 6);
-                    if (!officeArea.intersects(dugoutArea.minX(), dugoutArea.minZ(), dugoutArea.maxX(), dugoutArea.maxZ())) {
+                    // Keep a walkway between the plots so neither building lands on the other's doorstep.
+                    if (!officeArea.intersects(dugoutArea.minX() - PLOT_GAP, dugoutArea.minZ() - PLOT_GAP,
+                            dugoutArea.maxX() + PLOT_GAP, dugoutArea.maxZ() + PLOT_GAP)) {
                         return new Sites(dugout, office.get());
                     }
                 }

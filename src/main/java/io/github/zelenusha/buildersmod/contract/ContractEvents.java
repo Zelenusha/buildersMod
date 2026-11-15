@@ -189,7 +189,7 @@ public final class ContractEvents {
         return "Постройка принята. Зарплату можно забрать.";
     }
 
-    private static String cancel(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String cancel(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
         if (order == null) {
             return "Нет активной постройки.";
@@ -203,7 +203,7 @@ public final class ContractEvents {
         return "Заказ отменён. Штраф: " + fine + " изумрудов.";
     }
 
-    private static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static boolean checkDeadline(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
         if (order == null || account.pausedAt >= 0 || order.deadline() > data.time(player.server)
                 || account.stairInspection != ContractData.StairInspection.WAITING) {
@@ -406,7 +406,7 @@ public final class ContractEvents {
         return account.unpaid == 0 ? "Начислений к выдаче нет." : "Освободи место в инвентаре.";
     }
 
-    private static String buyTime(ServerPlayer player, ContractData data, ContractData.Account account) {
+    static String buyTime(ServerPlayer player, ContractData data, ContractData.Account account) {
         ContractData.Accepted order = account.active;
         if (order == null || !canBuyTime(account)) {
             return "Дополнительные сутки недоступны.";
@@ -563,31 +563,47 @@ public final class ContractEvents {
         if (!dialogue && order != null) {
             state = ContractNetwork.State.ACTIVE;
             cards.add(card(order, check(player, order), remaining(account, data.time(player.server)), true,
-                    canBuyTime(account)));
+                    canBuyTime(account), ""));
             OfferFactory.fill(player, data, account);
             for (var offer : account.offers) {
                 if (offer != null && offer.slot() != order.slot()) {
-                    cards.add(card(offer, null, offer.difficulty().duration(), false, false));
+                    cards.add(card(offer, null, offer.difficulty().duration(), false, false,
+                            "Сначала закончи текущую постройку"));
                 }
             }
         } else if (!dialogue && offersAreReady(player)) {
             ServerLevel site = player.server.getLevel(ConstructionSite.SITE_LEVEL);
             if (site != null) {
                 OfferFactory.fill(player, data, account);
+                // FR-163: an eviction, fire or flood blocks new rooms, courtyards and corridors but not the staircase.
+                boolean urgent = account.incidents.stream().anyMatch(work -> work.kind().pausesConstruction());
+                String busy = "Сначала закончи срочное задание";
+                List<ContractData.Accepted> shown = new ArrayList<>();
+                List<Boolean> fits = new ArrayList<>();
                 for (ContractData.Accepted offer : account.offers) {
                     if (offer != null && (offer.slot() < 3 || account.incidentOffers[offer.slot() - 3] == null)) {
-                        cards.add(card(offer, null, offer.difficulty().duration(),
-                                OfferFactory.bind(site, account, offer) != null, false));
+                        shown.add(offer);
+                        fits.add(OfferFactory.bind(site, account, offer) != null);
                     }
                 }
-                if (cards.stream().noneMatch(ContractNetwork.Card::available)) {
-                    ContractData.Accepted extension = OfferFactory.extension(site, account);
-                    if (extension != null) {
-                        cards.add(card(extension, null, extension.difficulty().duration(), true, false));
-                    }
+                ContractData.Accepted extension = fits.contains(true) ? null : OfferFactory.extension(site, account);
+                // FR-182: an offer that fits nowhere keeps its card and says why.
+                String noSpace = extension != null ? "Нет места на этаже, нужен отдельный заказ"
+                        : account.highestFloor >= ConstructionSite.FLOOR_COUNT ? "Открыт последний этаж" : "Проход перекрыт";
+                for (int index = 0; index < shown.size(); index++) {
+                    ContractData.Accepted offer = shown.get(index);
+                    cards.add(card(offer, null, offer.difficulty().duration(), fits.get(index) && !urgent, false,
+                            !fits.get(index) ? noSpace : urgent ? busy : ""));
+                }
+                if (extension != null) {
+                    boolean stairs = extension.kind() == ContractData.Kind.STAIRS;
+                    cards.add(card(extension, null, extension.difficulty().duration(), stairs || !urgent, false,
+                            stairs || !urgent ? "" : busy));
                 }
                 for (var yard : account.courtyards) {
-                    cards.add(card(yard, null, yard.difficulty().duration(), OfferFactory.canResume(site, yard), false));
+                    boolean free = OfferFactory.canResume(site, yard);
+                    cards.add(card(yard, null, yard.difficulty().duration(), free && !urgent, false,
+                            !free ? "Участок занят" : urgent ? busy : ""));
                 }
             }
             state = cards.stream().anyMatch(ContractNetwork.Card::available)
@@ -615,13 +631,14 @@ public final class ContractEvents {
     private static ContractNetwork.Card incidentCard(int slot, IncidentState.Kind kind, ContractBalance.Difficulty level,
                                                       boolean available, UUID id, BlockPos room) {
         return new ContractNetwork.Card(slot, kind.title, level.ordinal() + 1, level.emeralds(), 0, -1,
-                available, false, 0, room.toShortString(), 0, 0, List.of(), id, kind == IncidentState.Kind.CLEANUP);
+                available, false, 0, room.toShortString(), 0, 0, List.of(), id, kind == IncidentState.Kind.CLEANUP,
+                available ? "" : "Сначала закончи срочное задание");
     }
 
     private record MaterialKey(net.minecraft.world.item.Item primary, List<net.minecraft.world.item.Item> substitutes) { }
 
     private static ContractNetwork.Card card(ContractData.Accepted order, RoomBlueprint.BlueprintCheck check,
-                                             long remaining, boolean available, boolean canBuyTime) {
+                                             long remaining, boolean available, boolean canBuyTime, String note) {
         Map<MaterialKey, int[]> groups = new LinkedHashMap<>();
         for (var entry : order.blueprint().requirements().entrySet()) {
             BlockPos position = entry.getKey();
@@ -661,7 +678,8 @@ public final class ContractEvents {
         return new ContractNetwork.Card(order.slot(), order.kind().title, order.difficulty().ordinal() + 1,
                 order.wage(), bonus == null ? 0 : bonus.emeralds(), remaining, available, canBuyTime,
                 check == null ? 0 : check.mismatchCount(), bonus == null ? "" : bonus.block().asItem().getDescriptionId(),
-                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials, null, false);
+                check == null ? 0 : check.bonusBlockCount(), bonus == null ? 0 : bonus.exactCount(), materials, null, false,
+                note);
     }
 
     private static void sync(ServerPlayer player, ContractData data, ContractData.Account account) {

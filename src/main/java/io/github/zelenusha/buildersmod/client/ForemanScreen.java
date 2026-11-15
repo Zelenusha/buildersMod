@@ -11,13 +11,29 @@ import net.minecraft.network.chat.Component;
 final class ForemanScreen extends Screen {
     private static final int WIDTH = 316;
     private static final int HEIGHT = 227;
-    private final ContractNetwork.Panel panel;
+    private static final String[] GREETINGS = {
+            "Работа у нас найдётся. Посмотрим, что ты умеешь строить.",
+            "Время — изумруды. Мои изумруды. Так что не стой столбом.",
+            "Зарплату выдаю строго по чертежу. Штрафы — по вдохновению.",
+            "Если комната выйдет кривой, я замечу. Если ровной — тоже что-нибудь замечу.",
+            "Экономия — мать прибыли. Поэтому премий у нас нет. Ну, почти.",
+            "Строй быстрее! На этот этаж уже три покупателя и ни одной стены."
+    };
+    private final String greeting = GREETINGS[(int) (System.nanoTime() / 1_000 % GREETINGS.length)];
+    final ContractNetwork.Panel panel;
     private int selected;
     private int materialOffset;
 
     ForemanScreen(ContractNetwork.Panel panel) {
         super(Component.literal(panel.dialogue() ? "Прораб" : "Заказы строительной конторы"));
         this.panel = panel;
+        // Open on the order in progress even when it is a separate card at the end of the list.
+        for (int index = 0; index < panel.cards().size(); index++) {
+            if (isActiveConstruction(panel.cards().get(index))) {
+                selected = index;
+                break;
+            }
+        }
     }
 
     @Override
@@ -113,8 +129,7 @@ final class ForemanScreen extends Screen {
         graphics.fill(x, y, x + WIDTH, y + 2, 0xFF5396C4);
         graphics.drawString(font, title, x + 12, y + 11, 0xFFFFFF, false);
         if (panel.dialogue()) {
-            graphics.drawWordWrap(font, Component.literal("Работа у нас найдётся. Посмотрим, что ты умеешь строить."),
-                    x + 12, y + 44, WIDTH - 24, 0xE4E9ED);
+            graphics.drawWordWrap(font, Component.literal(greeting), x + 12, y + 44, WIDTH - 24, 0xE4E9ED);
             if (!panel.lastCall().isEmpty()) {
                 graphics.drawWordWrap(font, Component.literal("Последний звонок · " + panel.lastCall()),
                         x + 12, y + 79, WIDTH - 24, 0x8BCCF3);
@@ -152,7 +167,8 @@ final class ForemanScreen extends Screen {
                 graphics.drawString(font, "Можно принять дополнительно", x, y + 33, 0x91DE92, false);
             }
         } else if (!card.available() && card.remaining() >= 0) {
-            graphics.drawString(font, "Заказ сейчас недоступен", x, y + 22, 0xF3D88C, false);
+            graphics.drawString(font, card.note().isEmpty() ? "Заказ сейчас недоступен" : "Недоступен · " + card.note(),
+                    x, y + 22, 0xF3D88C, false);
         } else if (!card.bonusLabel().isEmpty()) {
             String label = Component.translatable(card.bonusLabel()).getString();
             String amount = active ? card.bonusFound() + "/" + card.bonusTarget() : "×" + card.bonusTarget();
