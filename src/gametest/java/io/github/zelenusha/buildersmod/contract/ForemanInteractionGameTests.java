@@ -11,9 +11,11 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.UUID;
+import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Connection;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.FriendlyByteBuf;
@@ -113,6 +115,110 @@ public final class ForemanInteractionGameTests {
         helper.succeed();
     }
 
+    @GameTest(template = "empty")
+    public static void appealsAFineAndClaimsTheAwardOnceThroughPlayPackets(GameTestHelper helper) {
+        var server = helper.getLevel().getServer();
+        ServerLevel overworld = server.overworld();
+        BlockPos office = helper.absolutePos(new BlockPos(1, 1, 1));
+        var player = new ServerPlayer(server, overworld, new GameProfile(UUID.randomUUID(), "appeal-packets"));
+        var connection = new Connection(PacketFlow.SERVERBOUND);
+        var channel = new EmbeddedChannel(connection);
+        connection.setProtocol(ConnectionProtocol.PLAY);
+        new ServerGamePacketListenerImpl(server, connection, player);
+
+        var storage = overworld.getDataStorage();
+        var previousIntro = IntroData.get(server);
+        var previousContracts = ContractData.get(server);
+        var contracts = new ContractData();
+        storage.set("buildersmod_intro", new IntroData());
+        storage.set("buildersmod_contracts", contracts);
+        Villager villager = null;
+        try {
+            IntroFixtures.setEmployment(player, office, Long.MAX_VALUE);
+            player.moveTo(office.getX() + 0.5, office.getY(), office.getZ() + 0.5, 0, 0);
+            overworld.addNewPlayer(player);
+            villager = foreman(overworld, office.east(), player.getUUID());
+            UUID foreman = villager.getUUID();
+            var account = contracts.account(player.getUUID());
+            String reason = "Гороскоп велел всё переделать";
+            var fine = account.fines.issue(10, reason, 4);
+            account.pendingWage = 6;
+            sendRequest(channel, foreman, ContractNetwork.Action.CLAIM, 0);
+            var settled = readPanel(channel);
+            helper.assertTrue(settled != null && settled.unpaid() == 0 && account.fines.find(fine.id()).withheld() == 6
+                    && player.getInventory().countItem(Items.EMERALD) == 0, "The fine first withholds the six earned emeralds");
+
+            sendRequest(channel, foreman, ContractNetwork.Action.APPEAL, 0, fine.id());
+            var first = readFines(channel);
+            helper.assertTrue(first != null && first.attempt() != null && first.attempt().required() == 2
+                            && first.attempt().cards().size() == 7 && first.attempt().hint().contains(reason)
+                            && first.fines().get(0).outstanding() == 4 && first.fines().get(0).attemptsLeft() == 1,
+                    "The first reply contains the disputed fine, seven cards, and the case-specific hint");
+            UUID firstAttempt = first.attempt().id();
+            int wrong = card(first.attempt(), "Гороскоп не входит в договор.");
+            sendRequest(channel, foreman, ContractNetwork.Action.CARD, wrong, firstAttempt);
+            var failed = readFines(channel);
+            helper.assertTrue(failed != null && failed.attempt() == null && failed.fines().get(0).attemptsLeft() == 1
+                    && account.unpaid == 0, "Choosing the second argument first ends the attempt without paying");
+
+            sendRequest(channel, foreman, ContractNetwork.Action.APPEAL, 0, fine.id());
+            var second = readFines(channel);
+            helper.assertTrue(second != null && second.attempt() != null && !second.attempt().id().equals(firstAttempt)
+                    && second.fines().get(0).attemptsLeft() == 0, "The second attempt has its own ID and exhausts the allowance");
+            AppealPuzzle puzzle = account.appeal;
+            UUID winningAttempt = second.attempt().id();
+            int evidence = card(second.attempt(), "Основание претензии — гороскоп.");
+            sendRequest(channel, foreman, ContractNetwork.Action.CARD, evidence, firstAttempt);
+            var stale = readFines(channel);
+            helper.assertTrue(stale != null && stale.attempt() != null && stale.attempt().selected() == 0,
+                    "A stale card packet from a previous attempt does not advance the current sequence");
+            sendRequest(channel, foreman, ContractNetwork.Action.CARD, evidence, winningAttempt);
+            var progress = readFines(channel);
+            helper.assertTrue(progress != null && progress.attempt() != null && progress.attempt().selected() == 1,
+                    "The reply advances by one after the first valid card");
+            int contract = card(second.attempt(), "Гороскоп не входит в договор.");
+            sendRequest(channel, foreman, ContractNetwork.Action.CARD, contract, winningAttempt);
+            var won = readFines(channel);
+            long compensation = fine.amount() + puzzle.remainingFullSeconds(System.nanoTime());
+            long award = 6 + compensation;
+            helper.assertTrue(won != null && won.attempt() == null && won.fines().get(0).overturned()
+                    && won.fines().get(0).outstanding() == 0 && account.unpaid == award,
+                    "The successful dispute cancels the remainder and credits both the refund and timed compensation");
+
+            account.pendingWage = 7;
+            var nextFine = account.fines.issue(3, "Отдельный штраф", 2);
+            var restored = ContractData.load(contracts.save(new CompoundTag()));
+            storage.set("buildersmod_contracts", restored);
+            var reloaded = restored.account(player.getUUID());
+            sendRequest(channel, foreman, ContractNetwork.Action.CARD, contract, winningAttempt);
+            var repeated = readFines(channel);
+            helper.assertTrue(repeated != null && repeated.fines().get(0).overturned() && reloaded.unpaid == award,
+                    "The resolution and award survive reload without duplicate compensation from the last card");
+            sendRequest(channel, foreman, ContractNetwork.Action.CLAIM, 0);
+            var paid = readPanel(channel);
+            helper.assertTrue(paid != null && paid.unpaid() == 0 && reloaded.fines.find(nextFine.id()).withheld() == 3
+                    && player.getInventory().countItem(Items.EMERALD) == award + 4,
+                    "The next fine is withheld from new wages while the appeal award is paid in full");
+            sendRequest(channel, foreman, ContractNetwork.Action.CLAIM, 0);
+            var empty = readPanel(channel);
+            helper.assertTrue(empty != null && empty.unpaid() == 0 && player.getInventory().countItem(Items.EMERALD) == award + 4,
+                    "Repeated collection cannot pay an empty balance");
+        } finally {
+            if (villager != null) {
+                villager.discard();
+            }
+            overworld.removePlayerImmediately(player, Entity.RemovalReason.DISCARDED);
+            channel.finishAndReleaseAll();
+            storage.set("buildersmod_intro", previousIntro);
+            storage.set("buildersmod_contracts", previousContracts);
+        }
+        helper.succeed();
+    }
+
+    private static int card(ContractNetwork.AppealView attempt, String text) {
+        return attempt.cards().stream().filter(card -> card.text().equals(text)).findFirst().orElseThrow().id();
+    }
+
     private static void verifySubmissionAndCollection(GameTestHelper helper, EmbeddedChannel channel, ServerPlayer player,
                                                       Villager own, Villager other, ContractData.Account account) {
         UUID foreman = own.getUUID();
@@ -162,27 +268,39 @@ public final class ForemanInteractionGameTests {
     }
 
     private static void sendRequest(EmbeddedChannel channel, UUID foreman, ContractNetwork.Action action, int choice) {
+        sendRequest(channel, foreman, action, choice, null);
+    }
+
+    private static void sendRequest(EmbeddedChannel channel, UUID foreman, ContractNetwork.Action action, int choice, UUID workId) {
         var data = new FriendlyByteBuf(Unpooled.buffer());
         data.writeByte(0);
-        data.writeUUID(foreman).writeEnum(action).writeVarInt(choice).writeBoolean(false);
+        data.writeUUID(foreman).writeEnum(action).writeVarInt(choice).writeNullable(workId, FriendlyByteBuf::writeUUID);
         channel.writeInbound(new ServerboundCustomPayloadPacket(CONTRACTS, data));
     }
 
     private static ContractNetwork.Panel readPanel(EmbeddedChannel channel) {
-        ContractNetwork.Panel panel = null;
+        return readReply(channel, 1, ContractNetwork.Panel::read);
+    }
+
+    private static ContractNetwork.FinePanel readFines(EmbeddedChannel channel) {
+        return readReply(channel, 5, ContractNetwork.FinePanel::read);
+    }
+
+    private static <T> T readReply(EmbeddedChannel channel, int type, Function<FriendlyByteBuf, T> decode) {
+        T reply = null;
         Object packet;
         while ((packet = channel.readOutbound()) != null) {
             if (packet instanceof ClientboundCustomPayloadPacket payload && payload.getIdentifier().equals(CONTRACTS)) {
                 FriendlyByteBuf data = payload.getData();
                 try {
-                    if (data.readUnsignedByte() == 1) {
-                        panel = ContractNetwork.Panel.read(data);
+                    if (data.readUnsignedByte() == type) {
+                        reply = decode.apply(data);
                     }
                 } finally {
                     data.release();
                 }
             }
         }
-        return panel;
+        return reply;
     }
 }
