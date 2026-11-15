@@ -106,6 +106,23 @@ public final class ContractData extends SavedData {
         return server.overworld().getDataStorage().computeIfAbsent(ContractData::load, ContractData::new, SAVE_ID);
     }
 
+    public boolean containsSiteWork(BlockPos position) {
+        for (Account account : accounts.values()) {
+            if (contains(account.active, position) || contains(account.special, position)
+                    || contains(account.pendingCourtyard, position)
+                    || account.rooms.stream().anyMatch(order -> contains(order, position))
+                    || account.courtyards.stream().anyMatch(order -> contains(order, position))
+                    || account.failed.stream().anyMatch(work -> contains(work.order(), position))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean contains(Accepted order, BlockPos position) {
+        return order != null && order.blueprint().bounds().contains(position);
+    }
+
     Account account(UUID id) {
         return accounts.computeIfAbsent(id, ignored -> new Account());
     }

@@ -21,6 +21,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -57,6 +59,43 @@ public class SitePortalGameTests {
             overworld.setDayTime(original);
         }
         helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 200)
+    public static void lightsNewAndExistingDecksWhilePreservingWorkAreas(GameTestHelper helper) {
+        ServerLevel site = helper.getLevel().getServer().getLevel(ConstructionSite.SITE_LEVEL);
+        BlockPos light = new BlockPos(120_132, ConstructionSite.START_FLOOR_Y, 120_132);
+        site.getChunkAt(light);
+        for (int floor = 0; floor < ConstructionSite.FLOOR_COUNT; floor++) {
+            BlockPos lamp = light.above(floor * ConstructionSite.FLOOR_STEP);
+            helper.assertTrue(site.getBlockState(lamp).is(Blocks.SEA_LANTERN) && site.isEmptyBlock(lamp.above()),
+                    "Every new deck has a fixture flush with its walking surface");
+        }
+        var links = new SiteLinks();
+        BlockPos reserved = light.east(8);
+        BlockPos modified = light.south(8);
+        BlockState beforeReserved = site.getBlockState(reserved);
+        BlockState beforeModified = site.getBlockState(modified);
+        try {
+            site.setBlock(light, Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+            site.setBlock(reserved, Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+            site.setBlock(modified, Blocks.OAK_PLANKS.defaultBlockState(), Block.UPDATE_CLIENTS);
+            SiteLighting.retrofit(site, new ChunkPos(light), links, reserved::equals);
+            helper.assertTrue(site.getBlockState(light).is(Blocks.SEA_LANTERN) && site.getBlockState(reserved).is(Blocks.STONE)
+                            && site.getBlockState(modified).is(Blocks.OAK_PLANKS),
+                    "The retrofit illuminates bare stone and preserves work areas and installed flooring");
+            site.setBlock(light, Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+            SiteLighting.retrofit(site, new ChunkPos(light), links, pos -> false);
+            helper.assertTrue(site.getBlockState(light).is(Blocks.STONE)
+                            && links.save(new net.minecraft.nbt.CompoundTag()).getLongArray("CheckedLighting").length == 1,
+                    "The saved retrofit marker makes the operation one-time");
+        } finally {
+            site.setBlock(light, Blocks.SEA_LANTERN.defaultBlockState(), Block.UPDATE_CLIENTS);
+            site.setBlock(reserved, beforeReserved, Block.UPDATE_CLIENTS);
+            site.setBlock(modified, beforeModified, Block.UPDATE_CLIENTS);
+        }
+        helper.succeedWhen(() -> helper.assertTrue(site.getBrightness(LightLayer.BLOCK, light.above()) >= 13,
+                "The deck is illuminated independently of sunlight"));
     }
 
     @GameTest(template = "empty")

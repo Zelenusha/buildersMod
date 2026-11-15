@@ -2,6 +2,7 @@ package io.github.zelenusha.buildersmod.site;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -32,6 +33,7 @@ final class SiteFrameFeature extends Feature<NoneFeatureConfiguration> {
         WorldGenLevel level = context.level();
         BlockPos origin = context.origin();
         placeColumns(level, origin);
+        SiteLighting.generate(level, new ChunkPos(origin));
         if (origin.getX() >= -16 && origin.getX() <= 0 && origin.getZ() >= -16 && origin.getZ() <= 0) {
             placeStarterRoom(level, origin);
         }

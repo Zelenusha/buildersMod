@@ -134,6 +134,9 @@ public final class ConstructionSite {
             return;
         }
         ServerLevel source = player.serverLevel();
+        if (source.dimension() == SITE_LEVEL && player.tickCount % 20 == 0) {
+            SiteLighting.updateNearby(source, player.chunkPosition());
+        }
         BlockPos contact = player.blockPosition();
         if (!source.getBlockState(contact).is(PORTAL.get())) {
             return;

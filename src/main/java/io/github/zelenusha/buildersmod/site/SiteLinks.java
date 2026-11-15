@@ -1,7 +1,9 @@
 package io.github.zelenusha.buildersmod.site;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -13,6 +15,7 @@ import net.minecraft.world.level.saveddata.SavedData;
 
 final class SiteLinks extends SavedData {
     private final Map<UUID, PortalLocation> offices = new HashMap<>();
+    private final Set<Long> checkedLighting = new HashSet<>();
 
     static SiteLinks get(MinecraftServer server) {
         return server.overworld().getDataStorage().computeIfAbsent(SiteLinks::load, SiteLinks::new, "buildersmod_site_links");
@@ -28,6 +31,9 @@ final class SiteLinks extends SavedData {
                         BlockPos.of(entry.getLong("Frame")), axis, BlockPos.of(entry.getLong("Arrival"))));
             }
         }
+        for (long chunk : root.getLongArray("CheckedLighting")) {
+            links.checkedLighting.add(chunk);
+        }
         return links;
     }
 
@@ -38,6 +44,14 @@ final class SiteLinks extends SavedData {
 
     PortalLocation forPlayer(UUID player) {
         return offices.get(player);
+    }
+
+    boolean markLightingChecked(long chunk) {
+        if (!checkedLighting.add(chunk)) {
+            return false;
+        }
+        setDirty();
+        return true;
     }
 
     boolean protectsArrival(BlockPos pos) {
@@ -60,6 +74,7 @@ final class SiteLinks extends SavedData {
             entries.add(entry);
         });
         root.put("Offices", entries);
+        root.putLongArray("CheckedLighting", checkedLighting.stream().mapToLong(Long::longValue).toArray());
         return root;
     }
 }
